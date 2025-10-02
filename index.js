@@ -248,6 +248,19 @@ client.login(DISCORD_TOKEN).then(async () => {
 
   // Register slash commands after login
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
+  
+  // Clear old commands (run once, then remove this code)
+  try {
+    console.log("Clearing old commands...");
+    await rest.put(Routes.applicationCommands(client.user.id), { body: [] });
+    if (GUILD_ID) {
+      await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body: [] });
+    }
+    console.log("Old commands cleared.");
+  } catch (err) {
+    console.error("Error clearing commands:", err);
+  }
+  
   const commands = [
     new SlashCommandBuilder()
       .setName("jail")
