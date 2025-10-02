@@ -1,7 +1,14 @@
 import fs from "fs";
 import fetch from "node-fetch";
 import dotenv from "dotenv";
-import { Client, GatewayIntentBits, Partials, REST, Routes, SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import {
+  Client,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  EmbedBuilder
+} from "discord.js";
 
 dotenv.config();
 
@@ -12,21 +19,24 @@ const POLL_INTERVAL = (parseInt(process.env.POLL_INTERVAL || "60") || 60) * 1000
 const CONFIG_FILE = "./config.json";
 const STATE_FILE = "./jailstate.json";
 
+if (!DISCORD_TOKEN) {
+  console.error("Missing DISCORD_TOKEN in .env");
+  process.exit(1);
+}
+
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
 });
 
 // Load or initialize config
-let config = {};
-if (fs.existsSync(CONFIG_FILE)) {
-  config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
-}
+let config = fs.existsSync(CONFIG_FILE)
+  ? JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"))
+  : {};
 
 // Load or initialize jail state
-let jailState = {};
-if (fs.existsSync(STATE_FILE)) {
-  jailState = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-}
+let jailState = fs.existsSync(STATE_FILE)
+  ? JSON.parse(fs.readFileSync(STATE_FILE, "utf8"))
+  : {};
 
 function saveConfig() {
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
@@ -35,53 +45,30 @@ function saveState() {
   fs.writeFileSync(STATE_FILE, JSON.stringify(jailState, null, 2));
 }
 
-// Register slash commands
-const commands = [
-  new SlashCommandBuilder()
-    .setName("jail")
-    .setDescription("Setup jail notifications (lobdells idea)")
-    .addChannelOption(opt => opt.setName("channel").setDescription("Channel for jail alerts").setRequired(true))
-    .addRoleOption(opt => opt.setName("role").setDescription("Role to mention on jail alerts").setRequired(true))
-    .toJSON()
-];
-
-const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
-
-(async () => {
-  try {
-    console.log("Registering slash commands...");
-    await rest.put(
-      Routes.applicationCommands(client.user?.id || "bot_id_placeholder"),
-      { body: commands }
-    );
-    console.log("Slash commands registered.");
-  } catch (err) {
-    console.error(err);
-  }
-})();
-
 // Helper to build profile link
-function playerProfileLink(id) {
-  return `https://www.torn.com/profiles.php?XID=${id}`;
-}
+const playerProfileLink = (id) => `https://www.torn.com/profiles.php?XID=${id}`;
 
-// Normalize members from Torn API
-function normalizeMembers(apiData) {
+const normalizeMembers = (apiData) => {
   const members = [];
   if (!apiData || !apiData.members) return members;
   if (Array.isArray(apiData.members)) return apiData.members;
   for (const key of Object.keys(apiData.members)) {
     const m = apiData.members[key];
-    members.push({ player_id: m.player_id || Number(key), name: m.name || m.player_name || "Unknown", jail_time: m.jail_time || 0 });
+    members.push({
+      player_id: m.player_id || Number(key),
+      name: m.name || m.player_name || "Unknown",
+      jail_time: m.jail_time || 0
+    });
   }
   return members;
-}
+};
 
-// Poll Torn API for jailed members
 async function checkFactionJail() {
-  if (!config.channelId || !config.roleId) return; // not configured
+  if (!config.channelId || !config.roleId) return;
   try {
-    const res = await fetch(`https://api.torn.com/faction/${FACTION_ID}?selections=members&key=${TORN_API_KEY}`);
+    const res = await fetch(
+      `https://api.torn.com/faction/${FACTION_ID}?selections=members&key=${TORN_API_KEY}`
+    );
     const data = await res.json();
     const members = normalizeMembers(data);
     const channel = await client.channels.fetch(config.channelId);
@@ -104,7 +91,10 @@ async function checkFactionJail() {
           .setColor(0xff4500)
           .setTimestamp();
 
-        await channel.send({ content: `<@&${config.roleId}> • ${m.name} went to jail!`, embeds: [embed] });
+        await channel.send({
+          content: `<@&${config.roleId}> • ${m.name} went to jail!`,
+          embeds: [embed]
+        });
       }
 
       jailState[id] = jailTime;
@@ -126,15 +116,46 @@ client.on("interactionCreate", async (interaction) => {
     config.roleId = role.id;
     saveConfig();
 
-    await interaction.reply(`✅ Jail alerts configured! Channel: ${channel.name}, Role: ${role.name}`);
+    await interaction.reply(
+      `✅ Jail alerts configured! Channel: ${channel.name}, Role: ${role.name}`
+    );
   }
 });
 
-// Ready
-client.once("ready", () => {
+// Login first, then register commands
+client.login(DISCORD_TOKEN).then(async () => {
   console.log(`Logged in as ${client.user.tag}`);
+
+  // Register slash commands after login
+  const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
+  const commands = [
+    new SlashCommandBuilder()
+      .setName("jail")
+      .setDescription("Setup jail notifications (lobdells idea)")
+      .addChannelOption((opt) =>
+        opt
+          .setName("channel")
+          .setDescription("Channel for jail alerts")
+          .setRequired(true)
+      )
+      .addRoleOption((opt) =>
+        opt
+          .setName("role")
+          .setDescription("Role to mention on jail alerts")
+          .setRequired(true)
+      )
+      .toJSON()
+  ];
+
+  try {
+    console.log("Registering slash commands...");
+    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+    console.log("Slash commands registered.");
+  } catch (err) {
+    console.error(err);
+  }
+
+  // Start jail checking loop
   checkFactionJail();
   setInterval(checkFactionJail, POLL_INTERVAL);
 });
-
-client.login(DISCORD_TOKEN);
