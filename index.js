@@ -63,8 +63,9 @@ const normalizeMembers = (apiData) => {
   return members;
 };
 
+// Poll Torn API for jailed members
 async function checkFactionJail() {
-  if (!config.channelId || !config.roleId) return;
+  if (!config.channelId || !config.roleId) return; // not configured
   try {
     const res = await fetch(
       `https://api.torn.com/faction/${FACTION_ID}?selections=members&key=${TORN_API_KEY}`
@@ -108,6 +109,7 @@ async function checkFactionJail() {
 // Handle slash commands
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
+
   if (interaction.commandName === "jail") {
     const channel = interaction.options.getChannel("channel");
     const role = interaction.options.getRole("role");
@@ -119,6 +121,33 @@ client.on("interactionCreate", async (interaction) => {
     await interaction.reply(
       `✅ Jail alerts configured! Channel: ${channel.name}, Role: ${role.name}`
     );
+  }
+
+  // Test command for instant jail alert
+  if (interaction.commandName === "testjail") {
+    if (!config.channelId || !config.roleId) {
+      return interaction.reply("❌ Configure a channel and role first using /jail.");
+    }
+
+    const channel = await client.channels.fetch(config.channelId);
+    if (!channel || !channel.isTextBased()) return;
+
+    const embed = new EmbedBuilder()
+      .setTitle("🚨 Faction Member Jailed (Test)")
+      .setDescription("TestUser has just been jailed!")
+      .addFields(
+        { name: "Time left", value: `60 minute(s)`, inline: true },
+        { name: "Profile", value: `[Open profile](https://www.torn.com/profiles.php?XID=12345)`, inline: true }
+      )
+      .setColor(0xff4500)
+      .setTimestamp();
+
+    await channel.send({
+      content: `<@&${config.roleId}> • TestUser went to jail!`,
+      embeds: [embed]
+    });
+
+    await interaction.reply("✅ Test jail alert sent!");
   }
 });
 
@@ -144,6 +173,11 @@ client.login(DISCORD_TOKEN).then(async () => {
           .setDescription("Role to mention on jail alerts")
           .setRequired(true)
       )
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("testjail")
+      .setDescription("Send a fake jail alert for testing")
       .toJSON()
   ];
 
