@@ -106,6 +106,8 @@ async function checkFactionJail() {
     }
     
     const members = normalizeMembers(data);
+    console.log(`Checking ${members.length} faction members...`);
+    
     const channel = await client.channels.fetch(config.channelId);
     
     if (!channel || !channel.isTextBased()) {
@@ -120,6 +122,11 @@ async function checkFactionJail() {
       currentMemberIds.add(id);
       const jailTime = Number(m.jail_time || 0);
       const prev = Number(jailState[id] || 0);
+
+      // Debug logging
+      if (jailTime > 0) {
+        console.log(`${m.name} (${id}): jail_time=${jailTime}, prev=${prev}`);
+      }
 
       // Detect new jail event
       if (jailTime > 0 && prev === 0) {
