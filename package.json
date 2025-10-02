@@ -1,0 +1,25 @@
+{
+  "name": "crapplev2",
+  "version": "1.0.0",
+  "description": "crapples own discord bot",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/crapplo/crappleV2.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/crapplo/crappleV2/issues"
+  },
+  "homepage": "https://github.com/crapplo/crappleV2#readme",
+  "dependencies": {
+    "discord.js": "^14.22.1",
+    "dotenv": "^17.2.3",
+    "node-fetch": "^3.3.2"
+  }
+}
