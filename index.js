@@ -15,6 +15,7 @@ dotenv.config();
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const TORN_API_KEY = process.env.TORN_API_KEY;
 const FACTION_ID = process.env.FACTION_ID;
+const GUILD_ID = process.env.GUILD_ID;
 const POLL_INTERVAL = (parseInt(process.env.POLL_INTERVAL || "60") || 60) * 1000;
 const CONFIG_FILE = "./config.json";
 const STATE_FILE = "./jailstate.json";
@@ -273,8 +274,15 @@ client.login(DISCORD_TOKEN).then(async () => {
 
   try {
     console.log("Registering slash commands...");
-    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-    console.log("Slash commands registered.");
+    
+    // If GUILD_ID is set, register to that guild (instant)
+    // Otherwise register globally (takes up to 1 hour)
+    const route = GUILD_ID
+      ? Routes.applicationGuildCommands(client.user.id, GUILD_ID)
+      : Routes.applicationCommands(client.user.id);
+    
+    await rest.put(route, { body: commands });
+    console.log(`Slash commands registered ${GUILD_ID ? 'to guild' : 'globally'}.`);
   } catch (err) {
     console.error("Error registering commands:", err);
   }
