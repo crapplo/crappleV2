@@ -137,7 +137,7 @@ async function handleRoleReact(interaction) {
   const embed = new EmbedBuilder()
     .setTitle('🎭 Role Selection')
     .setDescription('React to get cool, colourful shiny roles!\nClick a reaction below to receive the corresponding role. YUPEE!')
-    .setColor(0x9b59b6) // A nice blue color
+    .setColor(0x9b59b6) // A nice PURPLE color
     .addFields(
       pairs.map(({ role, emoji }) => ({
         name: `${emoji} ${role.name}`,
