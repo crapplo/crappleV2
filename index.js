@@ -21,16 +21,20 @@ const CONFIG_FILE = "./config.json";
 const STATE_FILE = "./jailstate.json";
 
 // Validate required environment variables
+
+// Discord Token
 if (!DISCORD_TOKEN) {
   console.error("Missing DISCORD_TOKEN in .env");
   process.exit(1);
 }
 
+// Torn API
 if (!TORN_API_KEY) {
   console.error("Missing TORN_API_KEY in .env");
   process.exit(1);
 }
 
+// AoT Faction ID
 if (!FACTION_ID) {
   console.error("Missing FACTION_ID in .env");
   process.exit(1);
