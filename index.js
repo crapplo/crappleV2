@@ -49,7 +49,14 @@ if (!FACTION_ID) {
 
 // Create the Discord bot client with required permissions
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMembers],
+  intents: [
+    GatewayIntentBits.Guilds,           // For basic guild operations
+    GatewayIntentBits.GuildMembers,     // For member join events
+    GatewayIntentBits.GuildMessages,    // For message operations
+    GatewayIntentBits.MessageContent,   // For reading message content
+    GatewayIntentBits.GuildEmojisAndStickers,  // For emoji reactions
+    GatewayIntentBits.GuildMessageReactions,   // For handling reactions
+  ],
 });
 
 // Load saved configuration and jail state from disk (if available)
