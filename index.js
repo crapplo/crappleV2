@@ -133,14 +133,23 @@ async function handleRoleReact(interaction) {
     return interaction.reply({ content: '❌ You must specify at least one role/emoji pair.', ephemeral: true });
   }
 
-  // Compose the message
-  let desc = 'React to get a role!\n';
-  for (const { role, emoji } of pairs) {
-    desc += `${emoji} = ${role.name}\n`;
-  }
+  // Compose the embed message
+  const embed = new EmbedBuilder()
+    .setTitle('🎭 Role Selection')
+    .setDescription('React to get cool, colourful shiny roles!\nClick a reaction below to receive the corresponding role. YUPEE!')
+    .setColor(0x9b59b6) // A nice blue color
+    .addFields(
+      pairs.map(({ role, emoji }) => ({
+        name: `${emoji} ${role.name}`,
+        value: `React with ${emoji} to get the ${role.name} role`,
+        inline: true
+      }))
+    )
+    .setFooter({ text: 'Remove your reaction to lose the role' })
+    .setTimestamp();
 
-  // Send the message
-  const msg = await interaction.channel.send({ content: desc });
+  // Send the embed message
+  const msg = await interaction.channel.send({ embeds: [embed] });
   // Add reactions
   for (const { emoji } of pairs) {
     await msg.react(emoji).catch(() => {});
