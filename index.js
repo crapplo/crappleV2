@@ -49,7 +49,7 @@ if (!FACTION_ID) {
 
 // Create the Discord bot client with required permissions
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMembers],
 });
 
 // Load saved configuration and jail state from disk (if available)
@@ -148,6 +148,20 @@ async function handleRoleReact(interaction) {
 
   await interaction.reply({ content: 'Role react message sent!', ephemeral: true });
 }
+
+// Auto-role configuration
+let unverifiedRoleId = null;
+
+// Listen for new members joining
+client.on('guildMemberAdd', async (member) => {
+  if (!unverifiedRoleId) return;
+  try {
+    await member.roles.add(unverifiedRoleId);
+    console.log(`Added unverified role to new member: ${member.user.tag}`);
+  } catch (err) {
+    console.error(`Failed to add unverified role to ${member.user.tag}:`, err);
+  }
+});
 
 // Listen for reaction add/remove events
 client.on('messageReactionAdd', async (reaction, user) => {
@@ -359,6 +373,13 @@ client.on("interactionCreate", async (interaction) => {
     await handleRoleReact(interaction);
   }
 
+  // /setunverified command: configure auto-role for new members
+  if (interaction.commandName === "setunverified") {
+    const role = interaction.options.getRole("role");
+    unverifiedRoleId = role.id;
+    await interaction.reply(`✅ New members will now automatically receive the ${role.name} role.`);
+  }
+
   // /roleReact command: post a role reaction message
   if (interaction.commandName === "roleReact") {
     await handleRoleReact(interaction);
@@ -390,6 +411,17 @@ client.login(DISCORD_TOKEN).then(async () => {
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
   
   const commands = [
+    new SlashCommandBuilder()
+      .setName("setunverified")
+      .setDescription("Set the role to be automatically added to new members")
+      .addRoleOption(opt =>
+        opt
+          .setName("role")
+          .setDescription("The role to add to new members")
+          .setRequired(true)
+      )
+      .toJSON(),
+
     new SlashCommandBuilder()
       .setName("jail")
       .setDescription("Setup jail notifications (lobdells idea)") // Lobdell gets credit :)
