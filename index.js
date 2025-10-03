@@ -102,6 +102,88 @@ const normalizeMembers = (apiData) => {
   return members;
 };
 
+// --- Role React Feature ---
+// Store active role-react messages and their emoji-role mapping
+const activeRoleReactMessages = new Map();
+
+// /roleReact command handler
+async function handleRoleReact(interaction) {
+  // Only allow admins to use this command (optional)
+  if (!interaction.member.permissions.has('Administrator')) {
+    return interaction.reply({ content: '❌ You need admin permissions to use this command.', ephemeral: true });
+  }
+
+  // Collect up to 5 role/emoji pairs from options
+  const pairs = [];
+  for (let i = 1; i <= 5; i++) {
+    const role = interaction.options.getRole(`role${i}`);
+    const emoji = interaction.options.getString(`emoji${i}`);
+    if (role && emoji) {
+      pairs.push({ role, emoji });
+    }
+  }
+  if (pairs.length === 0) {
+    return interaction.reply({ content: '❌ You must specify at least one role/emoji pair.', ephemeral: true });
+  }
+
+  // Compose the message
+  let desc = 'React to get a role!\n';
+  for (const { role, emoji } of pairs) {
+    desc += `${emoji} = ${role.name}\n`;
+  }
+
+  // Send the message
+  const msg = await interaction.channel.send({ content: desc });
+  // Add reactions
+  for (const { emoji } of pairs) {
+    await msg.react(emoji).catch(() => {});
+  }
+
+  // Store mapping for this message
+  const emojiRoleMap = {};
+  for (const { role, emoji } of pairs) {
+    emojiRoleMap[emoji] = role.id;
+  }
+  activeRoleReactMessages.set(msg.id, emojiRoleMap);
+
+  await interaction.reply({ content: 'Role react message sent!', ephemeral: true });
+}
+
+// Listen for reaction add/remove events
+client.on('messageReactionAdd', async (reaction, user) => {
+  if (user.bot) return;
+  const { emoji, message } = reaction;
+  const emojiKey = emoji.id ? `<:${emoji.name}:${emoji.id}>` : emoji.name;
+  const emojiRoleMap = activeRoleReactMessages.get(message.id);
+  if (!emojiRoleMap) return;
+  const roleId = emojiRoleMap[emojiKey] || emojiRoleMap[emoji.name];
+  if (!roleId) return;
+  const guild = message.guild;
+  if (!guild) return;
+  const member = await guild.members.fetch(user.id).catch(() => null);
+  if (!member) return;
+  if (!member.roles.cache.has(roleId)) {
+    await member.roles.add(roleId).catch(() => {});
+  }
+});
+
+client.on('messageReactionRemove', async (reaction, user) => {
+  if (user.bot) return;
+  const { emoji, message } = reaction;
+  const emojiKey = emoji.id ? `<:${emoji.name}:${emoji.id}>` : emoji.name;
+  const emojiRoleMap = activeRoleReactMessages.get(message.id);
+  if (!emojiRoleMap) return;
+  const roleId = emojiRoleMap[emojiKey] || emojiRoleMap[emoji.name];
+  if (!roleId) return;
+  const guild = message.guild;
+  if (!guild) return;
+  const member = await guild.members.fetch(user.id).catch(() => null);
+  if (!member) return;
+  if (member.roles.cache.has(roleId)) {
+    await member.roles.remove(roleId).catch(() => {});
+  }
+});
+
 // Main function: check the Torn API to see who’s been jailed or released
 async function checkFactionJail() {
   // Skip if bot hasn’t been configured with a channel or role
@@ -271,6 +353,16 @@ client.on("interactionCreate", async (interaction) => {
       await interaction.reply("❌ Error sending test alert. Check logs.");
     }
   }
+
+  // /roleReact command: setup a message for role reactions
+  if (interaction.commandName === "rolereact") {
+    await handleRoleReact(interaction);
+  }
+
+  // /roleReact command: post a role reaction message
+  if (interaction.commandName === "roleReact") {
+    await handleRoleReact(interaction);
+  }
 });
 
 // Handle graceful shutdown (e.g., Ctrl+C or server stop)
@@ -318,6 +410,79 @@ client.login(DISCORD_TOKEN).then(async () => {
     new SlashCommandBuilder()
       .setName("testjail")
       .setDescription("Send a fake jail alert for testing")
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("rolereact")
+      .setDescription("Setup a message for role reactions")
+      .addRoleOption((opt) =>
+        opt
+          .setName("role1")
+          .setDescription("First role to assign")
+          .setRequired(true)
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName("emoji1")
+          .setDescription("Emoji for the first role")
+          .setRequired(true)
+      )
+      .addRoleOption((opt) =>
+        opt
+          .setName("role2")
+          .setDescription("Second role to assign")
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName("emoji2")
+          .setDescription("Emoji for the second role")
+      )
+      .addRoleOption((opt) =>
+        opt
+          .setName("role3")
+          .setDescription("Third role to assign")
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName("emoji3")
+          .setDescription("Emoji for the third role")
+      )
+      .addRoleOption((opt) =>
+        opt
+          .setName("role4")
+          .setDescription("Fourth role to assign")
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName("emoji4")
+          .setDescription("Emoji for the fourth role")
+      )
+      .addRoleOption((opt) =>
+        opt
+          .setName("role5")
+          .setDescription("Fifth role to assign")
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName("emoji5")
+          .setDescription("Emoji for the fifth role")
+      )
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("roleReact")
+      .setDescription("Post a message for users to react and get roles")
+      // Allow up to 5 role/emoji pairs
+      .addRoleOption(opt => opt.setName('role1').setDescription('Role #1').setRequired(true))
+      .addStringOption(opt => opt.setName('emoji1').setDescription('Emoji for role #1').setRequired(true))
+      .addRoleOption(opt => opt.setName('role2').setDescription('Role #2').setRequired(false))
+      .addStringOption(opt => opt.setName('emoji2').setDescription('Emoji for role #2').setRequired(false))
+      .addRoleOption(opt => opt.setName('role3').setDescription('Role #3').setRequired(false))
+      .addStringOption(opt => opt.setName('emoji3').setDescription('Emoji for role #3').setRequired(false))
+      .addRoleOption(opt => opt.setName('role4').setDescription('Role #4').setRequired(false))
+      .addStringOption(opt => opt.setName('emoji4').setDescription('Emoji for role #4').setRequired(false))
+      .addRoleOption(opt => opt.setName('role5').setDescription('Role #5').setRequired(false))
+      .addStringOption(opt => opt.setName('emoji5').setDescription('Emoji for role #5').setRequired(false))
       .toJSON()
   ];
 
