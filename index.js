@@ -150,7 +150,7 @@ async function handleRoleReact(interaction) {
 }
 
 // Auto-role configuration
-let unverifiedRoleId = null;
+let unverifiedRoleId = config.unverifiedRoleId || null;
 
 // Listen for new members joining
 client.on('guildMemberAdd', async (member) => {
@@ -377,13 +377,12 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.commandName === "setunverified") {
     const role = interaction.options.getRole("role");
     unverifiedRoleId = role.id;
+    config.unverifiedRoleId = role.id;
+    saveConfig();
     await interaction.reply(`✅ New members will now automatically receive the ${role.name} role.`);
   }
 
-  // /roleReact command: post a role reaction message
-  if (interaction.commandName === "roleReact") {
-    await handleRoleReact(interaction);
-  }
+  // End of command handlers
 });
 
 // Handle graceful shutdown (e.g., Ctrl+C or server stop)
@@ -501,21 +500,7 @@ client.login(DISCORD_TOKEN).then(async () => {
       )
       .toJSON(),
 
-    new SlashCommandBuilder()
-      .setName("roleReact")
-      .setDescription("Post a message for users to react and get roles")
-      // Allow up to 5 role/emoji pairs
-      .addRoleOption(opt => opt.setName('role1').setDescription('Role #1').setRequired(true))
-      .addStringOption(opt => opt.setName('emoji1').setDescription('Emoji for role #1').setRequired(true))
-      .addRoleOption(opt => opt.setName('role2').setDescription('Role #2').setRequired(false))
-      .addStringOption(opt => opt.setName('emoji2').setDescription('Emoji for role #2').setRequired(false))
-      .addRoleOption(opt => opt.setName('role3').setDescription('Role #3').setRequired(false))
-      .addStringOption(opt => opt.setName('emoji3').setDescription('Emoji for role #3').setRequired(false))
-      .addRoleOption(opt => opt.setName('role4').setDescription('Role #4').setRequired(false))
-      .addStringOption(opt => opt.setName('emoji4').setDescription('Emoji for role #4').setRequired(false))
-      .addRoleOption(opt => opt.setName('role5').setDescription('Role #5').setRequired(false))
-      .addStringOption(opt => opt.setName('emoji5').setDescription('Emoji for role #5').setRequired(false))
-      .toJSON()
+    // Command list ends here
   ];
 
   try {
