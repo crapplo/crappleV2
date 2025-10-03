@@ -96,6 +96,12 @@ async function checkFactionJail() {
     const res = await fetch(
       `https://api.torn.com/faction/15547?selections=members&key=${TORN_API_KEY}`
     );
+  
+  // IF BOT BREAKS REVERT TO THIS
+  //  try {
+    //const res = await fetch(
+      //`https://api.torn.com/v2/faction/${FACTION_ID}?selections=members&key=${TORN_API_KEY}`
+    //);
     
     if (!res.ok) {
       console.error(`API error: ${res.status} ${res.statusText}`);
@@ -142,7 +148,7 @@ async function checkFactionJail() {
             { name: "Time left", value: `${minutes} minute(s)`, inline: true },
             { name: "Profile", value: `[Open profile](${playerProfileLink(id)})`, inline: true }
           )
-          .setColor(0xff4500)
+          .setColor(9370DB)
           .setTimestamp();
 
         await channel.send({
