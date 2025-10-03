@@ -141,7 +141,7 @@ async function handleRoleReact(interaction) {
     .addFields(
       pairs.map(({ role, emoji }) => ({
         name: `${emoji} ${role.name}`,
-        value: `React with ${emoji} to get the ${role.name} role`,
+        //value: `React with ${emoji} to get the ${role.name} role`,
         inline: true
       }))
     )
