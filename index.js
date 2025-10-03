@@ -182,12 +182,16 @@ client.on("interactionCreate", async (interaction) => {
     config.roleId = role.id;
     saveConfig();
 
+    console.log(`[COMMAND] /jail used by ${interaction.user.tag} - Channel: ${channel.name}, Role: ${role.name}`);
+
     await interaction.reply(
       `✅ Jail alerts configured! Channel: ${channel.name}, Role: ${role.name}`
     );
   }
 
   if (interaction.commandName === "testjail") {
+    console.log(`[COMMAND] /testjail used by ${interaction.user.tag}`);
+    
     if (!config.channelId || !config.roleId) {
       return interaction.reply("❌ Configure a channel and role first using /jail.");
     }
