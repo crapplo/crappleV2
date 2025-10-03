@@ -85,7 +85,7 @@ async function checkFactionJail() {
   
   try {
     const res = await fetch(
-      `https://api.torn.com/faction/${FACTION_ID}?selections=members&key=${TORN_API_KEY}`
+      `https://api.torn.com/v2/faction/${FACTION_ID}?selections=members&key=${TORN_API_KEY}`
     );
     
     if (!res.ok) {
