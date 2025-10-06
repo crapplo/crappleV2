@@ -165,17 +165,37 @@ async function handleRoleReact(interaction) {
   await interaction.reply({ content: 'Role react message sent!', ephemeral: true });
 }
 
-// Auto-role configuration
+// Auto-role and welcome message configuration
 let unverifiedRoleId = config.unverifiedRoleId || null;
+let welcomeChannelId = config.welcomeChannelId || null;
 
 // Listen for new members joining
 client.on('guildMemberAdd', async (member) => {
-  if (!unverifiedRoleId) return;
   try {
-    await member.roles.add(unverifiedRoleId);
-    console.log(`Added unverified role to new member: ${member.user.tag}`);
+    // Add unverified role if configured
+    if (unverifiedRoleId) {
+      await member.roles.add(unverifiedRoleId);
+      console.log(`Added unverified role to new member: ${member.user.tag}`);
+    }
+
+    // Send welcome message if welcome channel is configured
+    if (welcomeChannelId) {
+      const welcomeChannel = await member.guild.channels.fetch(welcomeChannelId);
+      if (welcomeChannel && welcomeChannel.isTextBased()) {
+        const welcomeEmbed = new EmbedBuilder()
+          .setColor(0x9b59b6)
+          .setTitle('👋 Welcome!')
+          .setDescription(`Hey <@${member.id}>!\n\nPlease verify your Torn account by clicking the link above to access the server.`)
+          .setTimestamp();
+
+        await welcomeChannel.send({ 
+          content: `Welcome <@${member.id}>! 👋`,
+          embeds: [welcomeEmbed] 
+        });
+      }
+    }
   } catch (err) {
-    console.error(`Failed to add unverified role to ${member.user.tag}:`, err);
+    console.error(`Uhhhh crapple???? There's and error with ${member.user.tag}:`, err);
   }
 });
 
@@ -390,6 +410,17 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   // /setunverified command: configure auto-role for new members
+  if (interaction.commandName === "setwelcome") {
+    const channel = interaction.options.getChannel("channel");
+    if (!channel.isTextBased()) {
+      return interaction.reply({ content: "❌ Please select a text channel!", ephemeral: true });
+    }
+    welcomeChannelId = channel.id;
+    config.welcomeChannelId = channel.id;
+    saveConfig();
+    await interaction.reply(`✅ Welcome messages will now be sent in ${channel}.`);
+  }
+
   if (interaction.commandName === "setunverified") {
     const role = interaction.options.getRole("role");
     unverifiedRoleId = role.id;
@@ -426,6 +457,17 @@ client.login(DISCORD_TOKEN).then(async () => {
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
   
   const commands = [
+    new SlashCommandBuilder()
+      .setName("setwelcome")
+      .setDescription("Set the channel for welcome messages")
+      .addChannelOption(opt =>
+        opt
+          .setName("channel")
+          .setDescription("The channel to send welcome messages in")
+          .setRequired(true)
+      )
+      .toJSON(),
+
     new SlashCommandBuilder()
       .setName("setunverified")
       .setDescription("Set the role to be automatically added to new members")
