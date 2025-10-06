@@ -140,7 +140,7 @@ async function handleRoleReact(interaction) {
     .setColor(0x9b59b6) // A nice PURPLE color
     .addFields(
       pairs.map(({ role, emoji }) => ({
-        name: `${emoji} ${role.name}`,
+        name: `${emoji} - ${role.name}`,
         value: ``,
         inline: true
       }))
@@ -413,12 +413,12 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.commandName === "setwelcome") {
     const channel = interaction.options.getChannel("channel");
     if (!channel.isTextBased()) {
-      return interaction.reply({ content: "❌ Please select a text channel!", ephemeral: true });
+      return interaction.reply({ content: "❌ Rawr please select a text channel!", ephemeral: true });
     }
     welcomeChannelId = channel.id;
     config.welcomeChannelId = channel.id;
     saveConfig();
-    await interaction.reply(`✅ Welcome messages will now be sent in ${channel}.`);
+    await interaction.reply(`✅ Yuppee welcome messages will now be sent in ${channel}.`, ephimeral: true);
   }
 
   if (interaction.commandName === "setunverified") {
