@@ -137,7 +137,7 @@ client.on('guildMemberAdd', async (member) => {
     // Add unverified role
     if (unverifiedRoleId) {
       await member.roles.add(unverifiedRoleId);
-      console.log(`Slapped the unverified role on ${member.user.tag} hehe`);
+      console.log(`Booted unverified role on ${member.user.tag} hehe`);
     }
 
     // Send welcome message
@@ -174,7 +174,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
     try {
       await reaction.fetch();
     } catch (error) {
-      console.error('Failed to fetch reaction (message probably deleted lol):', error);
+      console.error('Failed to fetch reaction (message probably deleted):', error);
       return;
     }
   }
@@ -229,7 +229,7 @@ client.on('messageReactionRemove', async (reaction, user) => {
   
   if (member.roles.cache.has(roleId)) {
     await member.roles.remove(roleId).catch((err) => {
-      console.error(`Couldn't yeet role from ${user.tag}:`, err);
+      console.error(`Couldn't yoink role from ${user.tag}:`, err);
     });
   }
 });
@@ -251,7 +251,7 @@ async function checkFactionJail() {
     const data = await res.json();
     
     if (data.error) {
-      console.error("Torn API is having a moment:", data.error);
+      console.error("Torn API is having a moment (let's give them a moment):", data.error);
       return;
     }
     
@@ -290,7 +290,7 @@ async function checkFactionJail() {
       if (jailTime > 0 && prevTime === 0) {
         const embed = new EmbedBuilder()
           .setTitle("🚨 OH NO THEY GOT ARRESTED")
-          .setDescription(`${m.name} just got thrown in the slammer lmaooo`)
+          .setDescription(`${m.name} just got thrown in the chambers lmaooo`)
           .addFields(
             { name: "Time left", value: formatJailTime(jailTime), inline: true },
             { name: "Profile", value: `[go laugh at them](${playerProfileLink(id)})`, inline: true }
@@ -299,7 +299,7 @@ async function checkFactionJail() {
           .setTimestamp();
 
         await channel.send({
-          content: `<@&${config.roleId}> yo ${m.name} got jailed 💀`,
+          content: `<@&${config.roleId}> yo ${m.name} got jailed`,
           embeds: [embed]
         });
       }
@@ -308,7 +308,7 @@ async function checkFactionJail() {
       if (prevTime > 0 && jailTime === 0) {
         const embed = new EmbedBuilder()
           .setTitle("✅ FREEDOM!!!")
-          .setDescription(`${m.name} is out of jail! welcome back to society bestie`)
+          .setDescription(`${m.name} is out of jail! welcome back to society`)
           .addFields(
             { name: "Profile", value: `[say hi](${playerProfileLink(id)})`, inline: true }
           )
@@ -381,7 +381,7 @@ client.on("interactionCreate", async (interaction) => {
     console.log(`[COMMAND] ${interaction.user.tag} configured jail alerts - Channel: ${channel.name}, Role: ${role.name}`);
 
     await interaction.reply(
-      `✅ Ayyy jail alerts are good to go! Channel: ${channel.name}, Role: ${role.name}`
+      `✅ Ayyy jail alerts are good to go! Uh hope it works tho...? Channel: ${channel.name}, Role: ${role.name}`
     );
   }
 
@@ -410,14 +410,14 @@ client.on("interactionCreate", async (interaction) => {
         .setTimestamp();
 
       await channel.send({
-        content: `<@&${config.roleId}> yo TestyMcTestFace got jailed 💀 (this is a test btw)`,
+        content: `(role) yo TestyMcTestFace got jailed (this is a test btw)`,
         embeds: [embed]
       });
 
       await interaction.reply("✅ Test alert sent! check the channel :)");
     } catch (err) {
       console.error("Test alert failed:", err);
-      await interaction.reply("❌ something broke lol, check the logs");
+      await interaction.reply("❌ ughhhhh something broke, check the logs");
     }
   }
 
@@ -425,7 +425,7 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.commandName === "rolereact") {
     if (!interaction.member.permissions.has('Administrator')) {
       return interaction.reply({ 
-        content: '❌ sorry bestie, admins only for this one', 
+        content: '❌ whoops, admins only for this one buddy', 
         ephemeral: true 
       });
     }
@@ -441,7 +441,7 @@ client.on("interactionCreate", async (interaction) => {
     
     if (pairs.length === 0) {
       return interaction.reply({ 
-        content: '❌ you gotta give me at least one role/emoji combo my guy', 
+        content: '❌ you gotta give me at least one role/emoji combo buddy', 
         ephemeral: true 
       });
     }
@@ -525,7 +525,7 @@ client.on("interactionCreate", async (interaction) => {
     saveConfig();
     
     await interaction.reply({ 
-      content: `✅ New members gonna get ${role.name} automatically now!`, 
+      content: `✅ Yuppee new members gonna get ${role.name} automatically now!`, 
       ephemeral: true 
     });
   }
@@ -597,7 +597,7 @@ client.login(DISCORD_TOKEN).then(async () => {
 
     new SlashCommandBuilder()
       .setName("jail")
-      .setDescription("Setup jail stalking (shoutout lobdell for the idea)")
+      .setDescription("Setup jail stalking (lobdell idea)")
       .addChannelOption((opt) =>
         opt
           .setName("channel")
@@ -619,7 +619,7 @@ client.login(DISCORD_TOKEN).then(async () => {
 
     new SlashCommandBuilder()
       .setName("jailstatus")
-      .setDescription("Check who's currently in the slammer")
+      .setDescription("Check who's currently in the chambers")
       .toJSON(),
 
     new SlashCommandBuilder()
