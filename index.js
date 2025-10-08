@@ -137,7 +137,7 @@ client.on('guildMemberAdd', async (member) => {
     // Add unverified role
     if (unverifiedRoleId) {
       await member.roles.add(unverifiedRoleId);
-      console.log(`Booted unverified role on ${member.user.tag} hehe`);
+      console.log(`Slapped unverified role on ${member.user.tag} hehe`);
     }
 
     // Send welcome message
@@ -401,7 +401,7 @@ client.on("interactionCreate", async (interaction) => {
 
       const embed = new EmbedBuilder()
         .setTitle("🚨 OH NO THEY GOT ARRESTED (test)")
-        .setDescription("TestyMcTestFace just got thrown in the slammer lmaooo")
+        .setDescription("TestyMcTestFace just got thrown in the chambers lmaooo")
         .addFields(
           { name: "Time left", value: `69m (nice)`, inline: true },
           { name: "Profile", value: `[go laugh at them](https://www.torn.com/profiles.php?XID=12345)`, inline: true }
@@ -410,7 +410,7 @@ client.on("interactionCreate", async (interaction) => {
         .setTimestamp();
 
       await channel.send({
-        content: `(role) yo TestyMcTestFace got jailed (this is a test btw)`,
+        content: `<@&${config.roleId}> yo TestyMcTestFace got jailed (this is a test btw)`,
         embeds: [embed]
       });
 
@@ -539,11 +539,155 @@ client.on("interactionCreate", async (interaction) => {
     
     const embed = new EmbedBuilder()
       .setTitle('🚨 Current Jail Status')
-      .setDescription(jailed || 'Nobody\'s in jail rn! Everyone\'s being good :)')
+      .setDescription(jailed || 'Nobody\'s in the chambers rn! Everyone\'s being good :)')
       .setColor(jailed ? 0xFF6B6B : 0x57F287)
       .setTimestamp();
     
     await interaction.reply({ embeds: [embed], ephemeral: true });
+  }
+
+  // /event command
+  if (interaction.commandName === "event") {
+    const title = interaction.options.getString("title");
+    const description = interaction.options.getString("description") || "No description provided lol";
+    const timeStr = interaction.options.getString("time");
+    const role = interaction.options.getRole("role");
+
+    // Only require ManageMessages permission if trying to ping a role
+    if (role && !interaction.member.permissions.has('ManageMessages')) {
+      return interaction.reply({ 
+        content: '❌ You need Manage Messages permission to ping roles with events', 
+        ephemeral: true 
+      });
+    }
+
+    // Validate the ISO 8601 time format
+    let eventTime;
+    try {
+      eventTime = new Date(timeStr);
+      if (isNaN(eventTime.getTime())) {
+        throw new Error("Invalid date");
+      }
+    } catch (err) {
+      return interaction.reply({
+        content: "❌ bruh that's not a valid time format. Use `YYYY-MM-DDTHH:MM:SSZ` like `2025-10-08T20:00:00Z` (that Z at the end is important!)",
+        ephemeral: true
+      });
+    }
+
+    // Check if event is in the future
+    const now = new Date();
+    if (eventTime <= now) {
+      return interaction.reply({
+        content: "❌ Event time must be in the future!",
+        ephemeral: true
+      });
+    }
+
+    // Create the event embed with Discord timestamps
+    const unixTimestamp = Math.floor(eventTime.getTime() / 1000);
+    const embed = new EmbedBuilder()
+      .setTitle(`📅 ${title}`)
+      .setDescription(description)
+      .addFields(
+        { 
+          name: "When", 
+          value: `<t:${unixTimestamp}:F>\n(<t:${unixTimestamp}:R>)`, 
+          inline: false 
+        },
+        {
+          name: "RSVP",
+          value: "React to let others know if you're coming!\n✅ Going\n❌ Not going\n❓ Maybe",
+          inline: false
+        }
+      )
+      .setColor(0x5865F2)
+      .setFooter({ text: `Created by ${interaction.user.tag}` })
+      .setTimestamp();
+
+    await interaction.reply({ content: 'Creating event...', ephemeral: true });
+
+    // Send event message and add reaction options
+    const msg = await interaction.channel.send({
+      content: role ? `<@&${role.id}> 📅 New event!` : "📅 New event!",
+      embeds: [embed]
+    });
+
+    // Add RSVP reactions
+    await msg.react('✅');
+    await msg.react('❌');
+    await msg.react('❓');
+
+    // Track RSVPs
+    const going = new Set();
+    const notGoing = new Set();
+    const maybe = new Set();
+
+    const filter = (reaction, user) => 
+      ['✅', '❌', '❓'].includes(reaction.emoji.name) && !user.bot;
+    
+    const collector = msg.createReactionCollector({ filter, time: eventTime.getTime() - now.getTime() });
+
+    collector.on('collect', async (reaction, user) => {
+      // Remove user from all other response sets
+      going.delete(user.id);
+      notGoing.delete(user.id);
+      maybe.delete(user.id);
+
+      // Add to appropriate set
+      switch (reaction.emoji.name) {
+        case '✅': going.add(user.id); break;
+        case '❌': notGoing.add(user.id); break;
+        case '❓': maybe.add(user.id); break;
+      }
+
+      // Update embed with current counts
+      const updatedEmbed = EmbedBuilder.from(msg.embeds[0])
+        .spliceFields(1, 1, {
+          name: "RSVP",
+          value: `React to let others know if you're coming!\n✅ Going (${going.size})\n❌ Not going (${notGoing.size})\n❓ Maybe (${maybe.size})`,
+          inline: false
+        });
+
+      await msg.edit({ embeds: [updatedEmbed] });
+    });
+
+    collector.on('remove', async (reaction, user) => {
+      // Remove from appropriate set
+      switch (reaction.emoji.name) {
+        case '✅': going.delete(user.id); break;
+        case '❌': notGoing.delete(user.id); break;
+        case '❓': maybe.delete(user.id); break;
+      }
+
+      // Update embed with current counts
+      const updatedEmbed = EmbedBuilder.from(msg.embeds[0])
+        .spliceFields(1, 1, {
+          name: "RSVP",
+          value: `React to let others know if you're coming!\n✅ Going (${going.size})\n❌ Not going (${notGoing.size})\n❓ Maybe (${maybe.size})`,
+          inline: false
+        });
+
+      await msg.edit({ embeds: [updatedEmbed] });
+    });
+
+    // When event starts, ping everyone who's going
+    setTimeout(async () => {
+      if (going.size === 0) {
+        await msg.reply('Event is starting, but nobody RSVP\'d as going! 😢');
+        return;
+      }
+
+      const mentions = Array.from(going).map(id => `<@${id}>`).join(' ');
+      await msg.reply(`⏰ **${title} is starting now!** ${mentions}`);
+    }, eventTime.getTime() - now.getTime());
+
+    await interaction.editReply({ 
+      content: '✅ Event created! People can now RSVP with reactions.', 
+      ephemeral: true 
+    });
+
+    console.log(`[COMMAND] ${interaction.user.tag} created event: ${title} at ${timeStr}${role ? ` (pinging ${role.name})` : ''}`);
   }
 });
 
@@ -660,6 +804,31 @@ client.login(DISCORD_TOKEN).then(async () => {
       )
       .addStringOption((opt) =>
         opt.setName("emoji5").setDescription("Emoji for fifth role")
+      )
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("event")
+      .setDescription("Create an event announcement with a date/time")
+      .addStringOption(opt =>
+        opt.setName("title")
+          .setDescription("Event title")
+          .setRequired(true)
+      )
+      .addStringOption(opt =>
+        opt.setName("time")
+          .setDescription("Event time like 2025-10-08T20:00:00Z (year-month-day T hour:min:sec Z)")
+          .setRequired(true)
+      )
+      .addStringOption(opt =>
+        opt.setName("description")
+          .setDescription("Event description (optional)")
+          .setRequired(false)
+      )
+      .addRoleOption(opt =>
+        opt.setName("role")
+          .setDescription("Role to ping for this event (optional)")
+          .setRequired(false)
       )
       .toJSON(),
   ];
