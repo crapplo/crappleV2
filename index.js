@@ -401,7 +401,7 @@ client.on("interactionCreate", async (interaction) => {
 
       const embed = new EmbedBuilder()
         .setTitle("🚨 OH NO THEY GOT ARRESTED (test)")
-        .setDescription("TestyMcTestFace just got thrown in the chambers lmaooo")
+        .setDescription("TestyMcTest just got thrown in the chambers lmaooo")
         .addFields(
           { name: "Time left", value: `69m (nice)`, inline: true },
           { name: "Profile", value: `[go laugh at them](https://www.torn.com/profiles.php?XID=12345)`, inline: true }
@@ -448,7 +448,7 @@ client.on("interactionCreate", async (interaction) => {
 
     const embed = new EmbedBuilder()
       .setTitle('🎭 GRAB YOUR ROLES HERE!')
-      .setDescription('React below to snag some sick roles! Remove your reaction to yeet the role back.\n\nPretty simple tbh')
+      .setDescription('React below to snag some sick roles! Remove your reaction to delete role I think.\n\nPretty simple tbh')
       .setColor(0x9b59b6)
       .addFields(
         pairs.map(({ role, emoji }) => ({
