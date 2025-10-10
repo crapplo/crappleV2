@@ -717,8 +717,9 @@ client.login(DISCORD_TOKEN).then(async () => {
   client.user.setPresence({
     activities: [{ 
       name: "Mommy ASMR ", 
-      type: 2 }],
-      url:: 'https://www.youtube.com/watch?v=ic5EFF3FM88'
+      type: 2 ,
+      url: 'https://www.youtube.com/watch?v=ic5EFF3FM88',
+    }],
     status: "online"
   });
 
