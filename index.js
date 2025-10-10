@@ -859,8 +859,3 @@ client.login(DISCORD_TOKEN).then(async () => {
   console.error("Login failed rip:", err);
   process.exit(1);
 });
-
-client.user.setPresence({
-  activities: [{ name: "Mommy ASMR", type: 2 }],
-  status: "online"
-});
