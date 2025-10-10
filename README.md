@@ -2,8 +2,8 @@
 
 A Discord bot for monitoring Torn faction members' jail status and community utilities.
 
-- This repository contains a bot that provides:
--
+This repository contains a bot that provides:
+
 - - ~~Jail monitoring: checks the Torn API for faction members and announces when they're jailed/released.~~
 - Role reaction messages: create messages where users react to receive/remove roles.
 - Auto-role for new members: optionally add an "unverified" role to new members.
