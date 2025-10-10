@@ -91,10 +91,3 @@ Commands that require admin permissions will reply with an ephemeral error if yo
 - When registering commands for testing, provide `GUILD_ID` in `.env` so commands are available instantly in that guild. Remove `GUILD_ID` to register globally (may take up to an hour).
 
 ---
-
-If you'd like, I can also:
-- Add an example `.env.example`
-- Add a minimal `package.json` scripts section for `start`/`dev`
-- Add unit tests for some helper functions
-
-If you want any of these, tell me which and I'll add them.
