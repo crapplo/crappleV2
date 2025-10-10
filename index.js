@@ -714,6 +714,11 @@ process.on('SIGTERM', () => {
 client.login(DISCORD_TOKEN).then(async () => {
   console.log(`🎉 Logged in as ${client.user.tag} - let's gooooo`);
 
+  client.user.setPresence({
+    activities: [{ name: "Mommy ASMR", type: 2 }],
+    status: "online"
+  });
+
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
   
   const commands = [
