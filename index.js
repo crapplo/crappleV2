@@ -699,8 +699,8 @@ const CHAIN_WATCH_CHANNEL_ID = '1025212821102927893';
 // { userId: '123456789012345678', time: '13:00', name: 'crapple' },
 // { userId: '234567890123456789', time: '18:00', name: 'mg' }
 const chainWatchSchedule = [
- { userId: '1029159689612689448', time: '11:35', name: 'crapple' },
-  // { userId: '234567890123456789', time: '18:00', name: 'mg' }
+ { userId: '1029159689612689448', time: '11:40', name: 'crapple' },
+ { userId: '1029159689612689448', time: '11:45', name: 'crapple 2' }
 ];
 
 // Internal: track which reminders have been sent today
