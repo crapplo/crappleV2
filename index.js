@@ -691,175 +691,99 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n👋 Shutting down gracefully... peace out!');
-  saveState();
-  saveConfig();
-  saveRoleReactMessages();
-  client.destroy();
-  process.exit(0);
-});
+// THe channel where all the mentions/reminders will go
+const CHAIN_WATCH_CHANNEL_ID = '1025212821102927893';
 
-process.on('SIGTERM', () => {
-  console.log('\n👋 Got the shutdown signal... bye bye!');
-  saveState();
-  saveConfig();
-  saveRoleReactMessages();
-  client.destroy();
-  process.exit(0);
-});
+// Chain watch schedule: add entries here
+// Example:
+// { userId: '123456789012345678', time: '13:00', name: 'crapple' },
+// { userId: '234567890123456789', time: '18:00', name: 'mg' }
+const chainWatchSchedule = [
+ { userId: '1029159689612689448', time: '11:35', name: 'crapple' },
+  // { userId: '234567890123456789', time: '18:00', name: 'mg' }
+];
 
-// Login and start bot
-client.login(DISCORD_TOKEN).then(async () => {
-  console.log(`🎉 Logged in as ${client.user.tag} - let's gooooo`);
+// Internal: track which reminders have been sent today
+let sentChainWatch = {};
 
-  client.user.setPresence({
-    activities: [{ 
-      name: "Mommy ASMR ", 
-      type: 2 ,
-      url: 'https://www.youtube.com/watch?v=ic5EFF3FM88',
-    }],
-    status: "online"
-  });
+// Helper: get next Date object for a given "HH:MM" time in UTC
+function getNextTimeTodayOrTomorrow(timeStr) {
+  const [hour, minute] = timeStr.split(':').map(Number);
+  const now = new Date();
+  let target = new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+    hour,
+    minute,
+    0,
+    0
+  ));
+  if (target <= now) {
+    // If time has passed today, schedule for tomorrow
+    target.setUTCDate(target.getUTCDate() + 1);
+  }
+  return target;
+}
 
-  const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
-  
-  const commands = [
-    new SlashCommandBuilder()
-      .setName("setwelcome")
-      .setDescription("Set where to spam welcome messages")
-      .addChannelOption(opt =>
-        opt
-          .setName("channel")
-          .setDescription("The channel to spam in")
-          .setRequired(true)
-      )
-      .toJSON(),
+// Function to check and send chain watch reminders
+async function processChainWatchSchedule() {
+  const now = new Date();
+  for (const entry of chainWatchSchedule) {
+    const key = `${entry.userId}_${entry.time}_${entry.name}`;
+    const target = getNextTimeTodayOrTomorrow(entry.time);
+    const diff = target - now;
+    // If within the next minute and not already sent for this occurrence
+    if (diff >= 0 && diff < 60 * 1000) {
+      if (!sentChainWatch[key] || sentChainWatch[key] < target.getTime()) {
+        try {
+          const channel = await client.channels.fetch(CHAIN_WATCH_CHANNEL_ID).catch(() => null);
+          if (!channel || !channel.isTextBased()) {
+            console.error("Chain watch channel config is invalid, skipping reminder");
+            continue;
+          }
 
-    new SlashCommandBuilder()
-      .setName("setunverified")
-      .setDescription("Set auto-role for new members")
-      .addRoleOption(opt =>
-        opt
-          .setName("role")
-          .setDescription("The role to slap on newbies")
-          .setRequired(true)
-      )
-      .toJSON(),
+          await channel.send(`⏰ <@${entry.userId}> **Reminder:** ${entry.name} at ${entry.time} UTC! Don't forget to watch the chain! 📺`);
 
-    new SlashCommandBuilder()
-      .setName("jail")
-      .setDescription("Setup jail stalking (lobdell idea)")
-      .addChannelOption((opt) =>
-        opt
-          .setName("channel")
-          .setDescription("Where to send jail alerts")
-          .setRequired(true)
-      )
-      .addRoleOption((opt) =>
-        opt
-          .setName("role")
-          .setDescription("Role to ping when someone gets arrested")
-          .setRequired(true)
-      )
-      .toJSON(),
+          // Mark this reminder as sent
+          sentChainWatch[key] = target.getTime();
+        } catch (err) {
+          console.error("Failed to send chain watch reminder:", err);
+        }
+      }
+    }
+  }
+}
 
-    new SlashCommandBuilder()
-      .setName("testjail")
-      .setDescription("Send a fake jail alert to test if it works")
-      .toJSON(),
+// Ready event - start the jail and chain watch checks
+client.once("ready", async () => {
+  console.log(`Logged in as ${client.user.tag}!`);
 
-    new SlashCommandBuilder()
-      .setName("jailstatus")
-      .setDescription("Check who's currently in the chambers")
-      .toJSON(),
+  // Load config values
+  unverifiedRoleId = config.unverifiedRoleId || null;
+  welcomeChannelId = config.welcomeChannelId || null;
 
-    new SlashCommandBuilder()
-      .setName("rolereact")
-      .setDescription("Create a message where people can react for roles")
-      .addRoleOption((opt) =>
-        opt
-          .setName("role1")
-          .setDescription("First role")
-          .setRequired(true)
-      )
-      .addStringOption((opt) =>
-        opt
-          .setName("emoji1")
-          .setDescription("Emoji for first role")
-          .setRequired(true)
-      )
-      .addRoleOption((opt) =>
-        opt.setName("role2").setDescription("Second role")
-      )
-      .addStringOption((opt) =>
-        opt.setName("emoji2").setDescription("Emoji for second role")
-      )
-      .addRoleOption((opt) =>
-        opt.setName("role3").setDescription("Third role")
-      )
-      .addStringOption((opt) =>
-        opt.setName("emoji3").setDescription("Emoji for third role")
-      )
-      .addRoleOption((opt) =>
-        opt.setName("role4").setDescription("Fourth role")
-      )
-      .addStringOption((opt) =>
-        opt.setName("emoji4").setDescription("Emoji for fourth role")
-      )
-      .addRoleOption((opt) =>
-        opt.setName("role5").setDescription("Fifth role")
-      )
-      .addStringOption((opt) =>
-        opt.setName("emoji5").setDescription("Emoji for fifth role")
-      )
-      .toJSON(),
-
-    new SlashCommandBuilder()
-      .setName("event")
-      .setDescription("Create an event announcement with a date/time")
-      .addStringOption(opt =>
-        opt.setName("title")
-          .setDescription("Event title")
-          .setRequired(true)
-      )
-      .addStringOption(opt =>
-        opt.setName("time")
-          .setDescription("Event time like 2025-10-08T20:00:00Z (year-month-day T hour:min:sec Z)")
-          .setRequired(true)
-      )
-      .addStringOption(opt =>
-        opt.setName("description")
-          .setDescription("Event description (optional)")
-          .setRequired(false)
-      )
-      .addRoleOption(opt =>
-        opt.setName("role")
-          .setDescription("Role to ping for this event (optional)")
-          .setRequired(false)
-      )
-      .toJSON(),
-  ];
-
+  // Initial jail state load
   try {
-    console.log("Registering slash commands...");
-    
-    const route = GUILD_ID
-      ? Routes.applicationGuildCommands(client.user.id, GUILD_ID)
-      : Routes.applicationCommands(client.user.id);
-    
-    await rest.put(route, { body: commands });
-    console.log(`✅ Commands registered ${GUILD_ID ? 'to guild' : 'globally'}!`);
+    await checkFactionJail();
   } catch (err) {
-    console.error("Command registration went boom:", err);
+    console.error("Error during initial jail check:", err);
   }
 
-  // Start jail monitoring
-  console.log(`👀 Starting jail stalking (checking every ${POLL_INTERVAL / 1000}s)...`);
-  checkFactionJail();
-  setInterval(checkFactionJail, POLL_INTERVAL);
-}).catch(err => {
-  console.error("Login failed rip:", err);
-  process.exit(1);
+  // Process chain watch schedule
+  processChainWatchSchedule();
+
+  // Set up recurring tasks
+  setInterval(async () => {
+    try {
+      await checkFactionJail();
+    } catch (err) {
+      console.error("Error during scheduled jail check:", err);
+    }
+
+    processChainWatchSchedule();
+  }, POLL_INTERVAL);
 });
+
+// Login to Discord
+client.login(DISCORD_TOKEN);
