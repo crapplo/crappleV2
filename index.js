@@ -729,28 +729,28 @@ function getNextTimeTodayOrTomorrow(timeStr) {
 // Function to check and send chain watch reminders
 async function processChainWatchSchedule() {
   const now = new Date();
+  const nowHour = now.getUTCHours();
+  const nowMinute = now.getUTCMinutes();
   for (const entry of chainWatchSchedule) {
-    const key = `${entry.userId}_${entry.time}_${entry.name}`;
-    const target = getNextTimeTodayOrTomorrow(entry.time);
-    const diff = target - now;
-    // If within the next minute and not already sent for this occurrence
-    if (diff >= 0 && diff < 60 * 1000) {
-      if (!sentChainWatch[key] || sentChainWatch[key] < target.getTime()) {
+    const [hour, minute] = entry.time.split(':').map(Number);
+    const key = `${entry.userId}_${entry.time}_${entry.name}_${now.toISOString().slice(0,10)}`; // unique per day
+    if (nowHour === hour && nowMinute === minute) {
+      if (!sentChainWatch[key]) {
         try {
           const channel = await client.channels.fetch(CHAIN_WATCH_CHANNEL_ID).catch(() => null);
           if (!channel || !channel.isTextBased()) {
             console.error("Chain watch channel config is invalid, skipping reminder");
             continue;
           }
-
           await channel.send(`⏰ <@${entry.userId}> **Reminder:** ${entry.name} at ${entry.time} UTC! Don't forget to watch the chain! 📺`);
-
-          // Mark this reminder as sent
-          sentChainWatch[key] = target.getTime();
+          sentChainWatch[key] = true;
         } catch (err) {
           console.error("Failed to send chain watch reminder:", err);
         }
       }
+    } else {
+      // Reset for next day
+      sentChainWatch[key] = false;
     }
   }
 }
