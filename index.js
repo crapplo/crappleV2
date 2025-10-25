@@ -700,7 +700,7 @@ const CHAIN_WATCH_CHANNEL_ID = '1168943503544418354';
 // { userId: '234567890123456789', datetime: '2025-02-15 18:00', name: 'mg' }
 const chainWatchSchedule = [
  //{ userId: '', datetime: '', name: '' },
- { userId: '1029159689612689448', datetime: '2025-10-25 10:20', name: 'TEST' }
+ { userId: '1029159689612689448', datetime: '2025-10-25 10:30', name: 'TEST' },
  { userId: '1277971252023263312', datetime: '2025-10-25 18:25', name: 'Pooboi' }
 ];
 
