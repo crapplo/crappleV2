@@ -731,7 +731,7 @@ async function processChainWatchSchedule() {
           console.error("Chain watch channel config is invalid, skipping reminder");
           continue;
         }
-        await channel.send(`⏰ <@${entry.userId}>\n**Reminder:** ${entry.name} your chain watching starts noW! 📺`);
+        await channel.send(`⏰ <@${entry.userId}>\n**Reminder:** ${entry.name} your chain watching starts now! 📺`);
         sentChainWatch[key] = true;
       } catch (err) {
         console.error("Failed to send chain watch reminder:", err);
