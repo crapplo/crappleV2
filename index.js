@@ -692,65 +692,50 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // THe channel where all the mentions/reminders will go
-const CHAIN_WATCH_CHANNEL_ID = '1025212821102927893';
+const CHAIN_WATCH_CHANNEL_ID = '1168943503544418354';
 
-// Chain watch schedule: add entries here
+// Chain watch schedule: add entries here with both date and time
 // Example:
-// { userId: '123456789012345678', time: '13:00', name: 'crapple' },
-// { userId: '234567890123456789', time: '18:00', name: 'mg' }
+// { userId: '123456789012345678', datetime: '2025-01-20 13:00', name: 'crapple' },
+// { userId: '234567890123456789', datetime: '2025-02-15 18:00', name: 'mg' }
 const chainWatchSchedule = [
- { userId: '1029159689612689448', time: '11:40', name: 'crapple' },
- { userId: '1029159689612689448', time: '11:45', name: 'crapple 2' }
+ //{ userId: '', datetime: '', name: '' },
+ { userId: '1029159689612689448', datetime: '2025-10-25 10:20', name: 'TEST' }
+ { userId: '1277971252023263312', datetime: '2025-10-25 18:25', name: 'Pooboi' }
 ];
 
-// Internal: track which reminders have been sent today
+// Internal: track which reminders have been sent
 let sentChainWatch = {};
 
-// Helper: get next Date object for a given "HH:MM" time in UTC
-function getNextTimeTodayOrTomorrow(timeStr) {
-  const [hour, minute] = timeStr.split(':').map(Number);
-  const now = new Date();
-  let target = new Date(Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate(),
-    hour,
-    minute,
-    0,
-    0
-  ));
-  if (target <= now) {
-    // If time has passed today, schedule for tomorrow
-    target.setUTCDate(target.getUTCDate() + 1);
-  }
-  return target;
+// Helper: parse datetime string into Date object
+function parseDateTime(dateTimeStr) {
+  const [date, time] = dateTimeStr.split(' ');
+  const [year, month, day] = date.split('-').map(Number);
+  const [hour, minute] = time.split(':').map(Number);
+  return new Date(Date.UTC(year, month - 1, day, hour, minute, 0, 0));
 }
 
 // Function to check and send chain watch reminders
 async function processChainWatchSchedule() {
   const now = new Date();
-  const nowHour = now.getUTCHours();
-  const nowMinute = now.getUTCMinutes();
+  
   for (const entry of chainWatchSchedule) {
-    const [hour, minute] = entry.time.split(':').map(Number);
-    const key = `${entry.userId}_${entry.time}_${entry.name}_${now.toISOString().slice(0,10)}`; // unique per day
-    if (nowHour === hour && nowMinute === minute) {
-      if (!sentChainWatch[key]) {
-        try {
-          const channel = await client.channels.fetch(CHAIN_WATCH_CHANNEL_ID).catch(() => null);
-          if (!channel || !channel.isTextBased()) {
-            console.error("Chain watch channel config is invalid, skipping reminder");
-            continue;
-          }
-          await channel.send(`⏰ <@${entry.userId}> **Reminder:** ${entry.name} at ${entry.time} UTC! Don't forget to watch the chain! 📺`);
-          sentChainWatch[key] = true;
-        } catch (err) {
-          console.error("Failed to send chain watch reminder:", err);
+    const targetTime = parseDateTime(entry.datetime);
+    const key = `${entry.userId}_${entry.datetime}_${entry.name}`;
+    
+    // Check if the current time matches the target time (within the same minute)
+    if (Math.abs(now - targetTime) <= 60000 && !sentChainWatch[key]) {
+      try {
+        const channel = await client.channels.fetch(CHAIN_WATCH_CHANNEL_ID).catch(() => null);
+        if (!channel || !channel.isTextBased()) {
+          console.error("Chain watch channel config is invalid, skipping reminder");
+          continue;
         }
+        await channel.send(`⏰ <@${entry.userId}> **Reminder:** ${entry.name} at ${entry.datetime} UTC! Don't forget to watch the chain! 📺`);
+        sentChainWatch[key] = true;
+      } catch (err) {
+        console.error("Failed to send chain watch reminder:", err);
       }
-    } else {
-      // Reset for next day
-      sentChainWatch[key] = false;
     }
   }
 }
