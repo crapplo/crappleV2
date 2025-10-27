@@ -112,6 +112,12 @@ function saveXp() {
   }
 }
 
+// Add missing xpToLevel helper
+function xpToLevel(xp) {
+  xp = Number(xp) || 0;
+  return Math.floor(0.1 * Math.sqrt(xp));
+}
+
 // Helper: create Torn profile link
 const playerProfileLink = (id) => `https://www.torn.com/profiles.php?XID=${id}`;
 
@@ -249,6 +255,38 @@ client.on('messageReactionRemove', async (reaction, user) => {
     await member.roles.remove(roleId).catch((err) => {
       console.error(`Couldn't yoink role from ${user.tag}:`, err);
     });
+  }
+});
+
+// Add messageCreate handler for XP awarding with cooldown
+client.on('messageCreate', async (message) => {
+  try {
+    if (message.author.bot) return;
+    if (!message.guild) return;
+    if (!message.channel || (message.channel && !message.channel.isTextBased())) return;
+
+    const key = `${message.guild.id}_${message.author.id}`;
+    const last = xpCooldowns.get(key) || 0;
+    const now = Date.now();
+    if (now - last < COOLDOWN_MS) return;
+    xpCooldowns.set(key, now);
+
+    const gained = Math.floor(Math.random() * (XP_MAX - XP_MIN + 1)) + XP_MIN;
+    const uid = message.author.id;
+    const prevXp = (xpData[uid] && xpData[uid].xp) || 0;
+    const prevLevel = xpToLevel(prevXp);
+
+    xpData[uid] = xpData[uid] || { xp: 0, messages: 0 };
+    xpData[uid].xp += gained;
+    xpData[uid].messages = (xpData[uid].messages || 0) + 1;
+    saveXp();
+
+    const newLevel = xpToLevel(xpData[uid].xp);
+    if (newLevel > prevLevel) {
+      message.channel.send(`🎉 <@${uid}> leveled up to **${newLevel}**! Congrats!`).catch(()=>{});
+    }
+  } catch (err) {
+    console.error("XP handler error:", err);
   }
 });
 
