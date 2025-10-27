@@ -52,6 +52,8 @@ const client = new Client({
     GatewayIntentBits.GuildEmojisAndStickers,
     GatewayIntentBits.GuildMessageReactions,
   ],
+  // Add partials so reaction/message events for uncached items won't produce warnings/errors
+  partials: ['MESSAGE', 'CHANNEL', 'REACTION', 'GUILD_MEMBER', 'USER'],
 });
 
 // Load persisted data
@@ -837,7 +839,7 @@ async function processChainWatchSchedule() {
 
 // Ready event - start the jail and chain watch checks
 client.once("ready", async () => {
-  console.log(`Logged in as ${client.user.tag}!`);
+  console.log(`Logged in as ${client.user?.tag || 'unknown user'}!`);
 
   // Load config values
   unverifiedRoleId = config.unverifiedRoleId || null;
