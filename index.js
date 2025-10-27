@@ -24,6 +24,7 @@ const POLL_INTERVAL = (parseInt(process.env.POLL_INTERVAL || "60") || 60) * 1000
 const CONFIG_FILE = "./config.json";
 const STATE_FILE = "./jailstate.json";
 const ROLE_REACT_FILE = "./rolereact.json";
+const XP_FILE = "./xp.json";
 
 // Validate required environment variables
 if (!DISCORD_TOKEN) {
@@ -66,6 +67,15 @@ let activeRoleReactMessages = fs.existsSync(ROLE_REACT_FILE)
   ? new Map(JSON.parse(fs.readFileSync(ROLE_REACT_FILE, "utf8")))
   : new Map();
 
+let xpData = fs.existsSync(XP_FILE)
+  ? JSON.parse(fs.readFileSync(XP_FILE, "utf8"))
+  : {};
+
+const xpCooldowns = new Map();
+const XP_MIN = 5;
+const XP_MAX = 15;
+const COOLDOWN_MS = 60 * 1000;
+
 // Helper functions for saving data
 function saveConfig() {
   try {
@@ -91,6 +101,14 @@ function saveRoleReactMessages() {
     );
   } catch (err) {
     console.error("Couldn't save role react stuff, rip:", err);
+  }
+}
+
+function saveXp() {
+  try {
+    fs.writeFileSync(XP_FILE, JSON.stringify(xpData, null, 2));
+  } catch (e) {
+    console.error("Couldn't save XP:", e);
   }
 }
 
@@ -688,6 +706,45 @@ client.on("interactionCreate", async (interaction) => {
     });
 
     console.log(`[COMMAND] ${interaction.user.tag} created event: ${title} at ${timeStr}${role ? ` (pinging ${role.name})` : ''}`);
+  }
+
+  // /profile command
+  if (interaction.commandName === "profile") {
+    const user = interaction.options.getUser("user") || interaction.user;
+    const data = xpData[user.id] || { xp: 0, messages: 0 };
+    const level = xpToLevel(data.xp);
+    const xpForLevel = (lvl) => 100 * lvl * lvl;
+    const currentLevelXp = xpForLevel(level);
+    const nextXp = xpForLevel(level + 1);
+    const progress = data.xp - currentLevelXp;
+    const needed = nextXp - data.xp;
+
+    const embed = new EmbedBuilder()
+      .setTitle(`${user.username}'s Profile`)
+      .addFields(
+        { name: "Level", value: `${level}`, inline: true },
+        { name: "XP", value: `${data.xp} ( +${progress}/${nextXp - currentLevelXp} toward next level )`, inline: true },
+        { name: "Messages", value: `${data.messages}`, inline: true }
+      )
+      .setColor(0x5865F2)
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [embed], ephemeral: true });
+  }
+
+  // /leaderboard command
+  if (interaction.commandName === "leaderboard") {
+    const entries = Object.entries(xpData);
+    entries.sort((a, b) => (b[1].xp || 0) - (a[1].xp || 0));
+    const top = entries.slice(0, 10);
+    const desc = top.map(([id, d], i) => `${i + 1}. <@${id}> — Level ${xpToLevel(d.xp || 0)} (${d.xp || 0} XP)`).join("\n") || "No data yet.";
+    const embed = new EmbedBuilder()
+      .setTitle("🏆 XP Leaderboard")
+      .setDescription(desc)
+      .setColor(0xFFD700)
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [embed], ephemeral: true });
   }
 });
 
