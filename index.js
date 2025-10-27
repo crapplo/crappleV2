@@ -764,6 +764,33 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
+// Register XP commands at startup so they show up in Discord
+(async () => {
+  const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
+  const commands = [
+    new SlashCommandBuilder()
+      .setName("profile")
+      .setDescription("View your XP profile or someone else's")
+      .addUserOption(option =>
+        option.setName("user").setDescription("User to check (default: you)").setRequired(false)
+      ),
+    new SlashCommandBuilder()
+      .setName("leaderboard")
+      .setDescription("View the XP leaderboard"),
+    // ...add other commands here if needed...
+  ].map(cmd => cmd.toJSON());
+
+  try {
+    await rest.put(
+      Routes.applicationGuildCommands(process.env.CLIENT_ID, GUILD_ID),
+      { body: commands }
+    );
+    console.log("XP commands registered.");
+  } catch (err) {
+    console.error("Failed to register XP commands:", err);
+  }
+})();
+
 const CHAIN_WATCH_CHANNEL_ID = '1168943503544418354';
 
 const chainWatchSchedule = [
