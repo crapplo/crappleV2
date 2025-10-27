@@ -838,34 +838,46 @@ async function processChainWatchSchedule() {
 }
 
 // Ready event - start the jail and chain watch checks
-client.once("ready", async () => {
-  console.log(`Logged in as ${client.user?.tag || 'unknown user'}!`);
+let _readyHandled = false;
+async function handleClientReady() {
+  if (_readyHandled) return;
+  _readyHandled = true;
 
-  // Load config values
-  unverifiedRoleId = config.unverifiedRoleId || null;
-  welcomeChannelId = config.welcomeChannelId || null;
-
-  // Initial jail state load
   try {
-    await checkFactionJail();
-  } catch (err) {
-    console.error("Error during initial jail check:", err);
-  }
+    console.log(`Logged in as ${client.user?.tag || 'unknown user'}!`);
 
-  // Process chain watch schedule
-  processChainWatchSchedule();
+    // Load config values
+    unverifiedRoleId = config.unverifiedRoleId || null;
+    welcomeChannelId = config.welcomeChannelId || null;
 
-  // Set up recurring tasks
-  setInterval(async () => {
+    // Initial jail state load
     try {
       await checkFactionJail();
     } catch (err) {
-      console.error("Error during scheduled jail check:", err);
+      console.error("Error during initial jail check:", err);
     }
 
+    // Process chain watch schedule
     processChainWatchSchedule();
-  }, POLL_INTERVAL);
-});
+
+    // Set up recurring tasks
+    setInterval(async () => {
+      try {
+        await checkFactionJail();
+      } catch (err) {
+        console.error("Error during scheduled jail check:", err);
+      }
+
+      processChainWatchSchedule();
+    }, POLL_INTERVAL);
+  } catch (err) {
+    console.error("Error in client ready handler:", err);
+  }
+}
+
+// Support both current 'ready' and future 'clientReady' events without duplication
+client.on('ready', handleClientReady);
+client.on('clientReady', handleClientReady);
 
 // Login to Discord
 client.login(DISCORD_TOKEN);
