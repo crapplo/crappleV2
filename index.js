@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import {
   Client,
   GatewayIntentBits,
+  Partials,
   REST,
   Routes,
   SlashCommandBuilder,
@@ -52,8 +53,13 @@ const client = new Client({
     GatewayIntentBits.GuildEmojisAndStickers,
     GatewayIntentBits.GuildMessageReactions,
   ],
-  // Add partials so reaction/message events for uncached items won't produce warnings/errors
-  partials: ['MESSAGE', 'CHANNEL', 'REACTION', 'GUILD_MEMBER', 'USER'],
+  partials: [
+    Partials.Message,
+    Partials.Channel,
+    Partials.Reaction,
+    Partials.GuildMember,
+    Partials.User
+  ],
 });
 
 // Load persisted data
@@ -114,7 +120,6 @@ function saveXp() {
   }
 }
 
-// Add missing xpToLevel helper
 function xpToLevel(xp) {
   xp = Number(xp) || 0;
   return Math.floor(0.1 * Math.sqrt(xp));
@@ -160,13 +165,11 @@ let welcomeChannelId = config.welcomeChannelId || null;
 // Welcome new members
 client.on('guildMemberAdd', async (member) => {
   try {
-    // Add unverified role
     if (unverifiedRoleId) {
       await member.roles.add(unverifiedRoleId);
       console.log(`Slapped unverified role on ${member.user.tag} hehe`);
     }
 
-    // Send welcome message
     if (welcomeChannelId) {
       try {
         const welcomeChannel = await member.guild.channels.fetch(welcomeChannelId);
@@ -195,7 +198,6 @@ client.on('guildMemberAdd', async (member) => {
 client.on('messageReactionAdd', async (reaction, user) => {
   if (user.bot) return;
   
-  // Handle partial reactions
   if (reaction.partial) {
     try {
       await reaction.fetch();
@@ -330,7 +332,6 @@ async function checkFactionJail() {
       const id = String(m.player_id);
       currentMemberIds.add(id);
       
-      // Initialize state object if needed
       if (typeof jailState[id] !== 'object') {
         jailState[id] = { time: 0, lastSeen: now };
       }
@@ -379,7 +380,7 @@ async function checkFactionJail() {
         });
       }
 
-      // JAIL TIME INCREASED (bailed and re-jailed)
+      // JAIL TIME INCREASED
       if (prevTime > 0 && jailTime > prevTime + 60) {
         const embed = new EmbedBuilder()
           .setTitle("🔄 LMAO THEY GOT JAILED AGAIN")
@@ -420,7 +421,6 @@ async function checkFactionJail() {
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
-  // /jail command
   if (interaction.commandName === "jail") {
     if (!interaction.member.permissions.has('Administrator')) {
       return interaction.reply({ 
@@ -443,7 +443,6 @@ client.on("interactionCreate", async (interaction) => {
     );
   }
 
-  // /testjail command
   if (interaction.commandName === "testjail") {
     console.log(`[COMMAND] ${interaction.user.tag} testing jail alerts`);
     
@@ -479,7 +478,6 @@ client.on("interactionCreate", async (interaction) => {
     }
   }
 
-  // /rolereact command
   if (interaction.commandName === "rolereact") {
     if (!interaction.member.permissions.has('Administrator')) {
       return interaction.reply({ 
@@ -522,7 +520,6 @@ client.on("interactionCreate", async (interaction) => {
 
     const msg = await interaction.channel.send({ embeds: [embed] });
     
-    // Add reactions with delay to avoid rate limits
     for (const { emoji } of pairs) {
       await msg.react(emoji).catch((err) => {
         console.error(`Couldn't react with ${emoji}:`, err);
@@ -530,7 +527,6 @@ client.on("interactionCreate", async (interaction) => {
       await new Promise(resolve => setTimeout(resolve, 500));
     }
 
-    // Store mapping
     const emojiRoleMap = {};
     for (const { role, emoji } of pairs) {
       emojiRoleMap[emoji] = role.id;
@@ -541,7 +537,6 @@ client.on("interactionCreate", async (interaction) => {
     await interaction.editReply({ content: '✅ Role react message is live! go nuts', ephemeral: true });
   }
 
-  // /setwelcome command
   if (interaction.commandName === "setwelcome") {
     if (!interaction.member.permissions.has('Administrator')) {
       return interaction.reply({ 
@@ -568,7 +563,6 @@ client.on("interactionCreate", async (interaction) => {
     });
   }
 
-  // /setunverified command
   if (interaction.commandName === "setunverified") {
     if (!interaction.member.permissions.has('Administrator')) {
       return interaction.reply({ 
@@ -588,7 +582,6 @@ client.on("interactionCreate", async (interaction) => {
     });
   }
 
-  // /jailstatus command
   if (interaction.commandName === "jailstatus") {
     const jailed = Object.entries(jailState)
       .filter(([_, data]) => data.time > 0)
@@ -604,14 +597,12 @@ client.on("interactionCreate", async (interaction) => {
     await interaction.reply({ embeds: [embed], ephemeral: true });
   }
 
-  // /event command
   if (interaction.commandName === "event") {
     const title = interaction.options.getString("title");
     const description = interaction.options.getString("description") || "No description provided lol";
     const timeStr = interaction.options.getString("time");
     const role = interaction.options.getRole("role");
 
-    // Only require ManageMessages permission if trying to ping a role
     if (role && !interaction.member.permissions.has('ManageMessages')) {
       return interaction.reply({ 
         content: '❌ You need Manage Messages permission to ping roles with events', 
@@ -619,7 +610,6 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // Validate the ISO 8601 time format
     let eventTime;
     try {
       eventTime = new Date(timeStr);
@@ -633,7 +623,6 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // Check if event is in the future
     const now = new Date();
     if (eventTime <= now) {
       return interaction.reply({
@@ -642,7 +631,6 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // Create the event embed with Discord timestamps
     const unixTimestamp = Math.floor(eventTime.getTime() / 1000);
     const embed = new EmbedBuilder()
       .setTitle(`📅 ${title}`)
@@ -665,18 +653,15 @@ client.on("interactionCreate", async (interaction) => {
 
     await interaction.reply({ content: 'Creating event...', ephemeral: true });
 
-    // Send event message and add reaction options
     const msg = await interaction.channel.send({
       content: role ? `<@&${role.id}> 📅 New event!` : "📅 New event!",
       embeds: [embed]
     });
 
-    // Add RSVP reactions
     await msg.react('✅');
     await msg.react('❌');
     await msg.react('❓');
 
-    // Track RSVPs
     const going = new Set();
     const notGoing = new Set();
     const maybe = new Set();
@@ -687,19 +672,16 @@ client.on("interactionCreate", async (interaction) => {
     const collector = msg.createReactionCollector({ filter, time: eventTime.getTime() - now.getTime() });
 
     collector.on('collect', async (reaction, user) => {
-      // Remove user from all other response sets
       going.delete(user.id);
       notGoing.delete(user.id);
       maybe.delete(user.id);
 
-      // Add to appropriate set
       switch (reaction.emoji.name) {
         case '✅': going.add(user.id); break;
         case '❌': notGoing.add(user.id); break;
         case '❓': maybe.add(user.id); break;
       }
 
-      // Update embed with current counts
       const updatedEmbed = EmbedBuilder.from(msg.embeds[0])
         .spliceFields(1, 1, {
           name: "RSVP",
@@ -711,14 +693,12 @@ client.on("interactionCreate", async (interaction) => {
     });
 
     collector.on('remove', async (reaction, user) => {
-      // Remove from appropriate set
       switch (reaction.emoji.name) {
         case '✅': going.delete(user.id); break;
         case '❌': notGoing.delete(user.id); break;
         case '❓': maybe.delete(user.id); break;
       }
 
-      // Update embed with current counts
       const updatedEmbed = EmbedBuilder.from(msg.embeds[0])
         .spliceFields(1, 1, {
           name: "RSVP",
@@ -729,7 +709,6 @@ client.on("interactionCreate", async (interaction) => {
       await msg.edit({ embeds: [updatedEmbed] });
     });
 
-    // When event starts, ping everyone who's going
     setTimeout(async () => {
       if (going.size === 0) {
         await msg.reply('Event is starting, but nobody RSVP\'d as going! 😢');
@@ -748,7 +727,6 @@ client.on("interactionCreate", async (interaction) => {
     console.log(`[COMMAND] ${interaction.user.tag} created event: ${title} at ${timeStr}${role ? ` (pinging ${role.name})` : ''}`);
   }
 
-  // /profile command
   if (interaction.commandName === "profile") {
     const user = interaction.options.getUser("user") || interaction.user;
     const data = xpData[user.id] || { xp: 0, messages: 0 };
@@ -757,7 +735,6 @@ client.on("interactionCreate", async (interaction) => {
     const currentLevelXp = xpForLevel(level);
     const nextXp = xpForLevel(level + 1);
     const progress = data.xp - currentLevelXp;
-    const needed = nextXp - data.xp;
 
     const embed = new EmbedBuilder()
       .setTitle(`${user.username}'s Profile`)
@@ -772,7 +749,6 @@ client.on("interactionCreate", async (interaction) => {
     await interaction.reply({ embeds: [embed], ephemeral: true });
   }
 
-  // /leaderboard command
   if (interaction.commandName === "leaderboard") {
     const entries = Object.entries(xpData);
     entries.sort((a, b) => (b[1].xp || 0) - (a[1].xp || 0));
@@ -788,23 +764,15 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// THe channel where all the mentions/reminders will go
 const CHAIN_WATCH_CHANNEL_ID = '1168943503544418354';
 
-// Chain watch schedule: add entries here with both date and time
-// Example:
-// { userId: '123456789012345678', datetime: '2025-01-20 13:00', name: 'crapple' },
-// { userId: '234567890123456789', datetime: '2025-02-15 18:00', name: 'mg' }
 const chainWatchSchedule = [
- //{ userId: '', datetime: '', name: '' },
  { userId: '1029159689612689448', datetime: '2025-10-25 10:40', name: 'TEST' },
  { userId: '1277971252023263312', datetime: '2025-10-25 18:25', name: 'Pooboi' }
 ];
 
-// Internal: track which reminders have been sent
 let sentChainWatch = {};
 
-// Helper: parse datetime string into Date object
 function parseDateTime(dateTimeStr) {
   const [date, time] = dateTimeStr.split(' ');
   const [year, month, day] = date.split('-').map(Number);
@@ -812,7 +780,6 @@ function parseDateTime(dateTimeStr) {
   return new Date(Date.UTC(year, month - 1, day, hour, minute, 0, 0));
 }
 
-// Function to check and send chain watch reminders
 async function processChainWatchSchedule() {
   const now = new Date();
   
@@ -820,7 +787,6 @@ async function processChainWatchSchedule() {
     const targetTime = parseDateTime(entry.datetime);
     const key = `${entry.userId}_${entry.datetime}_${entry.name}`;
     
-    // Check if the current time matches the target time (within the same minute)
     if (Math.abs(now - targetTime) <= 60000 && !sentChainWatch[key]) {
       try {
         const channel = await client.channels.fetch(CHAIN_WATCH_CHANNEL_ID).catch(() => null);
@@ -837,7 +803,6 @@ async function processChainWatchSchedule() {
   }
 }
 
-// Ready event - start the jail and chain watch checks
 let _readyHandled = false;
 async function handleClientReady() {
   if (_readyHandled) return;
@@ -846,21 +811,17 @@ async function handleClientReady() {
   try {
     console.log(`Logged in as ${client.user?.tag || 'unknown user'}!`);
 
-    // Load config values
     unverifiedRoleId = config.unverifiedRoleId || null;
     welcomeChannelId = config.welcomeChannelId || null;
 
-    // Initial jail state load
     try {
       await checkFactionJail();
     } catch (err) {
       console.error("Error during initial jail check:", err);
     }
 
-    // Process chain watch schedule
     processChainWatchSchedule();
 
-    // Set up recurring tasks
     setInterval(async () => {
       try {
         await checkFactionJail();
@@ -875,9 +836,6 @@ async function handleClientReady() {
   }
 }
 
-// Support both current 'ready' and future 'clientReady' events without duplication
-client.on('ready', handleClientReady);
-client.on('clientReady', handleClientReady);
+client.once('clientReady', handleClientReady);
 
-// Login to Discord
 client.login(DISCORD_TOKEN);
