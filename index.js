@@ -19,6 +19,7 @@ const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const TORN_API_KEY = process.env.TORN_API_KEY;
 const FACTION_ID = process.env.FACTION_ID;
 const GUILD_ID = process.env.GUILD_ID;
+const CLIENT_ID = process.env.CLIENT_ID;
 const POLL_INTERVAL = (parseInt(process.env.POLL_INTERVAL || "60") || 60) * 1000;
 
 // File paths for persistence
@@ -40,6 +41,16 @@ if (!TORN_API_KEY) {
 
 if (!FACTION_ID) {
   console.error("BRUH! Missing FACTION_ID in .env - who am I even watching???");
+  process.exit(1);
+}
+
+if (!CLIENT_ID) {
+  console.error("Missing CLIENT_ID in .env - need this to register commands!");
+  process.exit(1);
+}
+
+if (!GUILD_ID) {
+  console.error("Missing GUILD_ID in .env - need this to register commands!");
   process.exit(1);
 }
 
@@ -288,9 +299,9 @@ client.on('messageCreate', async (message) => {
     const newLevel = xpToLevel(xpData[uid].xp);
     if (newLevel > prevLevel) {
       const levelEmbed = new EmbedBuilder()
-        .setColor(0x9b59b6) // purple
+        .setColor(0x9b59b6)
         .setTitle('🎉 Level Up!')
-        .setDescription(`<${uid}> just reached **Level ${newLevel}**!`)
+        .setDescription(`<@${uid}> just reached **Level ${newLevel}**!`)
         .addFields(
           { name: 'Total XP', value: `${xpData[uid].xp}`, inline: true },
           { name: 'Messages', value: `${xpData[uid].messages}`, inline: true }
@@ -746,12 +757,13 @@ client.on("interactionCreate", async (interaction) => {
     const currentLevelXp = xpForLevel(level);
     const nextXp = xpForLevel(level + 1);
     const progress = data.xp - currentLevelXp;
+    const needed = nextXp - currentLevelXp;
 
     const embed = new EmbedBuilder()
       .setTitle(`${user.username}'s Profile`)
       .addFields(
         { name: "Level", value: `${level}`, inline: true },
-        { name: "XP", value: `${data.xp} ( +${progress}/${nextXp - currentLevelXp} toward next level )`, inline: true },
+        { name: "XP", value: `${data.xp} (+${progress}/${needed} toward next level)`, inline: true },
         { name: "Messages", value: `${data.messages}`, inline: true }
       )
       .setColor(0x5865F2)
@@ -775,10 +787,85 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// Register XP commands at startup so they show up in Discord
-(async () => {
+// Register all slash commands
+async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
   const commands = [
+    new SlashCommandBuilder()
+      .setName("jail")
+      .setDescription("Configure jail alert notifications")
+      .addChannelOption(option =>
+        option.setName("channel").setDescription("Channel for jail alerts").setRequired(true)
+      )
+      .addRoleOption(option =>
+        option.setName("role").setDescription("Role to ping for jail alerts").setRequired(true)
+      ),
+    new SlashCommandBuilder()
+      .setName("testjail")
+      .setDescription("Send a test jail alert"),
+    new SlashCommandBuilder()
+      .setName("jailstatus")
+      .setDescription("Check who's currently in jail"),
+    new SlashCommandBuilder()
+      .setName("rolereact")
+      .setDescription("Create a role reaction message")
+      .addRoleOption(option =>
+        option.setName("role1").setDescription("First role").setRequired(true)
+      )
+      .addStringOption(option =>
+        option.setName("emoji1").setDescription("First emoji").setRequired(true)
+      )
+      .addRoleOption(option =>
+        option.setName("role2").setDescription("Second role").setRequired(false)
+      )
+      .addStringOption(option =>
+        option.setName("emoji2").setDescription("Second emoji").setRequired(false)
+      )
+      .addRoleOption(option =>
+        option.setName("role3").setDescription("Third role").setRequired(false)
+      )
+      .addStringOption(option =>
+        option.setName("emoji3").setDescription("Third emoji").setRequired(false)
+      )
+      .addRoleOption(option =>
+        option.setName("role4").setDescription("Fourth role").setRequired(false)
+      )
+      .addStringOption(option =>
+        option.setName("emoji4").setDescription("Fourth emoji").setRequired(false)
+      )
+      .addRoleOption(option =>
+        option.setName("role5").setDescription("Fifth role").setRequired(false)
+      )
+      .addStringOption(option =>
+        option.setName("emoji5").setDescription("Fifth emoji").setRequired(false)
+      ),
+    new SlashCommandBuilder()
+      .setName("setwelcome")
+      .setDescription("Set the welcome message channel")
+      .addChannelOption(option =>
+        option.setName("channel").setDescription("Channel for welcome messages").setRequired(true)
+      ),
+    new SlashCommandBuilder()
+      .setName("setunverified")
+      .setDescription("Set the unverified role for new members")
+      .addRoleOption(option =>
+        option.setName("role").setDescription("Role to assign to new members").setRequired(true)
+      ),
+    new SlashCommandBuilder()
+      .setName("event")
+      .setDescription("Create an event with RSVP tracking")
+      .addStringOption(option =>
+        option.setName("title").setDescription("Event title").setRequired(true)
+      )
+      .addStringOption(option =>
+        option.setName("time").setDescription("Event time (YYYY-MM-DDTHH:MM:SSZ format)").setRequired(true)
+      )
+      .addStringOption(option =>
+        option.setName("description").setDescription("Event description").setRequired(false)
+      )
+      .addRoleOption(option =>
+        option.setName("role").setDescription("Role to ping for the event").setRequired(false)
+      ),
     new SlashCommandBuilder()
       .setName("profile")
       .setDescription("View your XP profile or someone else's")
@@ -787,26 +874,26 @@ client.on("interactionCreate", async (interaction) => {
       ),
     new SlashCommandBuilder()
       .setName("leaderboard")
-      .setDescription("View the XP leaderboard"),
-    // ...add other commands here if needed...
+      .setDescription("View the XP leaderboard")
   ].map(cmd => cmd.toJSON());
 
   try {
+    console.log("Registering slash commands...");
     await rest.put(
-      Routes.applicationGuildCommands(process.env.CLIENT_ID, GUILD_ID),
+      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
       { body: commands }
     );
-    console.log("XP commands registered.");
+    console.log("✅ All commands registered successfully!");
   } catch (err) {
-    console.error("Failed to register XP commands:", err);
+    console.error("Failed to register commands:", err);
   }
-})();
+}
 
 const CHAIN_WATCH_CHANNEL_ID = '1168943503544418354';
 
 const chainWatchSchedule = [
- { userId: '1029159689612689448', datetime: '2025-10-25 10:40', name: 'TEST' },
- { userId: '1277971252023263312', datetime: '2025-10-25 18:25', name: 'Pooboi' }
+  { userId: '1029159689612689448', datetime: '2025-10-25 10:40', name: 'TEST' },
+  { userId: '1277971252023263312', datetime: '2025-10-25 18:25', name: 'Pooboi' }
 ];
 
 let sentChainWatch = {};
@@ -852,6 +939,8 @@ async function handleClientReady() {
     unverifiedRoleId = config.unverifiedRoleId || null;
     welcomeChannelId = config.welcomeChannelId || null;
 
+    await registerCommands();
+
     try {
       await checkFactionJail();
     } catch (err) {
@@ -874,6 +963,6 @@ async function handleClientReady() {
   }
 }
 
-client.once('clientReady', handleClientReady);
+client.once('ready', handleClientReady);
 
 client.login(DISCORD_TOKEN);
