@@ -287,7 +287,18 @@ client.on('messageCreate', async (message) => {
 
     const newLevel = xpToLevel(xpData[uid].xp);
     if (newLevel > prevLevel) {
-      message.channel.send(`🎉 <@${uid}> leveled up to **${newLevel}**! Congrats!`).catch(()=>{});
+      const levelEmbed = new EmbedBuilder()
+        .setColor(0x9b59b6) // purple
+        .setTitle('🎉 Level Up!')
+        .setDescription(`<${uid}> just reached **Level ${newLevel}**!`)
+        .addFields(
+          { name: 'Total XP', value: `${xpData[uid].xp}`, inline: true },
+          { name: 'Messages', value: `${xpData[uid].messages}`, inline: true }
+        )
+        .setThumbnail(message.author.displayAvatarURL?.({ dynamic: true }) || '')
+        .setTimestamp();
+
+      await message.channel.send({ embeds: [levelEmbed] }).catch(()=>{});
     }
   } catch (err) {
     console.error("XP handler error:", err);
