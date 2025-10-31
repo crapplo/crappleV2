@@ -177,14 +177,31 @@ const normalizeMembers = (apiData) => {
   // If it's an object, convert to array
   for (const key of Object.keys(membersData)) {
     const m = membersData[key];
+
+    // Check multiple possible locations for jail time
+    let jailTime = 0;
+    if (m.jail_time !== undefined) {
+      jailTime = m.jail_time;
+    } else if (m.status?.until !== undefined) {
+      jailTime = m.status.until;
+    } else if (m.status?.state === 'Jail' || m.status?.state === 'jail') {
+      jailTime = m.status.until || m.status.time || 1; // At least mark as jailed
+    }
+
     members.push({
       player_id: m.player_id || m.id || Number(key),
       name: m.name || m.player_name || "Unknown",
-      jail_time: m.jail_time || m.status?.until || 0
+      jail_time: jailTime,
+      status: m.status // Keep full status for debugging
     });
   }
 
   console.log(`Normalized ${members.length} members from object format`);
+  // Log first member with jail time for debugging
+  const jailedExample = members.find(m => m.jail_time > 0);
+  if (jailedExample) {
+    console.log('Example jailed member:', JSON.stringify(jailedExample, null, 2));
+  }
   return members;
 };
 
@@ -549,6 +566,15 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.editReply(`❌ API Error: ${JSON.stringify(data.error, null, 2)}`);
       }
 
+      // Log raw API response structure for debugging
+      console.log('Raw API response keys:', Object.keys(data));
+      if (data.members) {
+        const firstMemberKey = Object.keys(data.members)[0];
+        if (firstMemberKey) {
+          console.log('Sample member data:', JSON.stringify(data.members[firstMemberKey], null, 2));
+        }
+      }
+
       const members = normalizeMembers(data);
       const jailedMembers = members.filter(m => m.jail_time > 0);
 
@@ -561,6 +587,8 @@ client.on("interactionCreate", async (interaction) => {
         jailedMembers.forEach(m => {
           response += `• ${m.name} (${m.player_id}): ${formatJailTime(m.jail_time)}\n`;
         });
+      } else {
+        response += `*No jailed members detected. Check console logs for raw API data.*`;
       }
 
       await interaction.editReply(response.substring(0, 2000));
@@ -859,6 +887,45 @@ client.on("interactionCreate", async (interaction) => {
 
     await interaction.reply({ embeds: [embed], ephemeral: true });
   }
+
+  if (interaction.commandName === "debugapi") {
+    if (!interaction.member.permissions.has('Administrator')) {
+      return interaction.reply({
+        content: '❌ need admin perms for this one',
+        ephemeral: true
+      });
+    }
+
+    const playerName = interaction.options.getString("name");
+    await interaction.deferReply({ ephemeral: true });
+
+    try {
+      const apiUrl = `https://api.torn.com/v2/faction/${FACTION_ID}?selections=members&key=${TORN_API_KEY}`;
+      const res = await fetch(apiUrl);
+      const data = await res.json();
+
+      if (data.error) {
+        return interaction.editReply(`❌ API Error: ${JSON.stringify(data.error, null, 2)}`);
+      }
+
+      const members = normalizeMembers(data);
+      const member = members.find(m => m.name.toLowerCase().includes(playerName.toLowerCase()));
+
+      if (!member) {
+        return interaction.editReply(`❌ Could not find member with name containing "${playerName}"`);
+      }
+
+      // Show raw member data
+      let response = `**Debug info for ${member.name}:**\n\`\`\`json\n`;
+      response += JSON.stringify(member, null, 2);
+      response += '\n```';
+
+      await interaction.editReply(response.substring(0, 2000));
+    } catch (err) {
+      console.error("Debug API failed:", err);
+      await interaction.editReply(`❌ Debug failed: ${err.message}`);
+    }
+  }
 });
 
 // Register all slash commands
@@ -880,6 +947,12 @@ async function registerCommands() {
     new SlashCommandBuilder()
       .setName("testapi")
       .setDescription("Test the Torn API connection and show current jail status"),
+    new SlashCommandBuilder()
+      .setName("debugapi")
+      .setDescription("Show raw API data for a specific member")
+      .addStringOption(option =>
+        option.setName("name").setDescription("Player name to debug").setRequired(true)
+      ),
     new SlashCommandBuilder()
       .setName("jailstatus")
       .setDescription("Check who's currently in jail"),
