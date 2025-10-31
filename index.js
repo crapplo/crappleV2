@@ -168,10 +168,40 @@ const normalizeMembers = (apiData) => {
     return members;
   }
 
-  // If already an array, return it
+  // If already an array, normalize it
   if (Array.isArray(membersData)) {
     console.log(`Found ${membersData.length} members (array format)`);
-    return membersData;
+
+    // Normalize array format to extract jail time from status
+    const normalized = membersData.map(m => {
+      let jailTime = 0;
+
+      // Check if member is jailed
+      if (m.status) {
+        if (m.status.state === 'Jailed' || m.status.state === 'Jail') {
+          // until is a timestamp, convert to seconds remaining
+          if (m.status.until) {
+            const now = Math.floor(Date.now() / 1000);
+            jailTime = Math.max(0, m.status.until - now);
+          }
+        }
+      }
+
+      return {
+        player_id: m.id || m.player_id,
+        name: m.name,
+        jail_time: jailTime,
+        status: m.status
+      };
+    });
+
+    // Log jailed members for debugging
+    const jailed = normalized.filter(m => m.jail_time > 0);
+    if (jailed.length > 0) {
+      console.log(`Found ${jailed.length} jailed members:`, jailed.map(m => `${m.name} (${m.jail_time}s)`));
+    }
+
+    return normalized;
   }
 
   // If it's an object, convert to array
