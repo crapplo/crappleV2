@@ -210,12 +210,19 @@ const normalizeMembers = (apiData) => {
 
     // Check multiple possible locations for jail time
     let jailTime = 0;
-    if (m.jail_time !== undefined) {
+
+    // Check if member is jailed (same logic as array format)
+    if (m.status) {
+      if (m.status.state === 'Jailed' || m.status.state === 'Jail') {
+        // until is a timestamp, convert to seconds remaining
+        if (m.status.until) {
+          const now = Math.floor(Date.now() / 1000);
+          jailTime = Math.max(0, m.status.until - now);
+        }
+      }
+    } else if (m.jail_time !== undefined) {
+      // Fallback for old API format
       jailTime = m.jail_time;
-    } else if (m.status?.until !== undefined) {
-      jailTime = m.status.until;
-    } else if (m.status?.state === 'Jail' || m.status?.state === 'jail') {
-      jailTime = m.status.until || m.status.time || 1; // At least mark as jailed
     }
 
     members.push({
