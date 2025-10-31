@@ -154,18 +154,38 @@ function formatJailTime(seconds) {
 // Helper: normalize faction members into consistent format
 const normalizeMembers = (apiData) => {
   const members = [];
-  if (!apiData || !apiData.members) return members;
 
-  if (Array.isArray(apiData.members)) return apiData.members;
+  // Handle missing or invalid data
+  if (!apiData) {
+    console.error("normalizeMembers: apiData is null/undefined");
+    return members;
+  }
 
-  for (const key of Object.keys(apiData.members)) {
-    const m = apiData.members[key];
+  // Check for members in different possible locations
+  let membersData = apiData.members || apiData.faction?.members || apiData;
+
+  if (!membersData) {
+    console.error("normalizeMembers: No members data found. API structure:", Object.keys(apiData));
+    return members;
+  }
+
+  // If already an array, return it
+  if (Array.isArray(membersData)) {
+    console.log(`Found ${membersData.length} members (array format)`);
+    return membersData;
+  }
+
+  // If it's an object, convert to array
+  for (const key of Object.keys(membersData)) {
+    const m = membersData[key];
     members.push({
-      player_id: m.player_id || Number(key),
+      player_id: m.player_id || m.id || Number(key),
       name: m.name || m.player_name || "Unknown",
-      jail_time: m.jail_time || 0
+      jail_time: m.jail_time || m.status?.until || 0
     });
   }
+
+  console.log(`Normalized ${members.length} members from object format`);
   return members;
 };
 
@@ -318,25 +338,33 @@ client.on('messageCreate', async (message) => {
 
 // Main jail checking function
 async function checkFactionJail() {
-  if (!config.channelId || !config.roleId) return;
-  
+  if (!config.channelId || !config.roleId) {
+    console.log("Jail check skipped: channelId or roleId not configured");
+    return;
+  }
+
   try {
-    const res = await fetch(
-      `https://api.torn.com/v2/faction/${FACTION_ID}?selections=members&key=${TORN_API_KEY}`
-    );
-    
+    // Try v2 API first, fall back to v1 if needed
+    const apiUrl = `https://api.torn.com/v2/faction/${FACTION_ID}?selections=members&key=${TORN_API_KEY}`;
+    console.log(`Calling Torn API: ${apiUrl.replace(TORN_API_KEY, 'API_KEY_HIDDEN')}`);
+
+    const res = await fetch(apiUrl);
+
     if (!res.ok) {
       console.error(`API said nope: ${res.status} ${res.statusText}`);
+      const errorText = await res.text();
+      console.error(`Response body: ${errorText}`);
       return;
     }
-    
+
     const data = await res.json();
-    
+    console.log(`API Response structure:`, Object.keys(data));
+
     if (data.error) {
-      console.error("Torn API is having a moment (let's give them a moment):", data.error);
+      console.error("Torn API error:", JSON.stringify(data.error, null, 2));
       return;
     }
-    
+
     const members = normalizeMembers(data);
     console.log(`Stalking ${members.length} faction peeps...`);
     
@@ -497,6 +525,48 @@ client.on("interactionCreate", async (interaction) => {
     } catch (err) {
       console.error("Test alert failed:", err);
       await interaction.reply("❌ ughhhhh something broke, check the logs");
+    }
+  }
+
+  if (interaction.commandName === "testapi") {
+    if (!interaction.member.permissions.has('Administrator')) {
+      return interaction.reply({
+        content: '❌ need admin perms for this one',
+        ephemeral: true
+      });
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    try {
+      const apiUrl = `https://api.torn.com/v2/faction/${FACTION_ID}?selections=members&key=${TORN_API_KEY}`;
+      console.log(`Testing API call to: ${apiUrl.replace(TORN_API_KEY, 'HIDDEN')}`);
+
+      const res = await fetch(apiUrl);
+      const data = await res.json();
+
+      if (data.error) {
+        return interaction.editReply(`❌ API Error: ${JSON.stringify(data.error, null, 2)}`);
+      }
+
+      const members = normalizeMembers(data);
+      const jailedMembers = members.filter(m => m.jail_time > 0);
+
+      let response = `✅ API is working!\n\n`;
+      response += `**Total members:** ${members.length}\n`;
+      response += `**Currently jailed:** ${jailedMembers.length}\n\n`;
+
+      if (jailedMembers.length > 0) {
+        response += `**Jailed members:**\n`;
+        jailedMembers.forEach(m => {
+          response += `• ${m.name} (${m.player_id}): ${formatJailTime(m.jail_time)}\n`;
+        });
+      }
+
+      await interaction.editReply(response.substring(0, 2000));
+    } catch (err) {
+      console.error("API test failed:", err);
+      await interaction.editReply(`❌ API test failed: ${err.message}`);
     }
   }
 
@@ -803,6 +873,9 @@ async function registerCommands() {
     new SlashCommandBuilder()
       .setName("testjail")
       .setDescription("Send a test jail alert"),
+    new SlashCommandBuilder()
+      .setName("testapi")
+      .setDescription("Test the Torn API connection and show current jail status"),
     new SlashCommandBuilder()
       .setName("jailstatus")
       .setDescription("Check who's currently in jail"),
