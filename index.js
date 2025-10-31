@@ -92,7 +92,7 @@ let xpData = fs.existsSync(XP_FILE)
 const xpCooldowns = new Map();
 const XP_MIN = 5;
 const XP_MAX = 15;
-const COOLDOWN_MS = 60 * 1000;
+const COOLDOWN_MS = 2000;
 
 // Helper functions for saving data
 function saveConfig() {
