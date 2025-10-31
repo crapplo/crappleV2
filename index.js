@@ -471,10 +471,7 @@ async function checkFactionJail() {
       if (prevTime > 0 && jailTime === 0) {
         const embed = new EmbedBuilder()
           .setTitle("✅ FREEDOM!!!")
-          .setDescription(`${m.name} is out of jail! welcome back to society`)
-          .addFields(
-            { name: "Profile", value: `[say hi](${playerProfileLink(id)})`, inline: true }
-          )
+          .setDescription(`${m.name} is out of jail!`)
           .setColor(0x57F287)
           .setTimestamp();
 
