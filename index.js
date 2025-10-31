@@ -1,6 +1,5 @@
 // Import required modules
 import fs from "fs";
-import fetch from "node-fetch";
 import dotenv from "dotenv";
 import {
   Client,
@@ -326,7 +325,7 @@ client.on('messageCreate', async (message) => {
           { name: 'Total XP', value: `${xpData[uid].xp}`, inline: true },
           { name: 'Messages', value: `${xpData[uid].messages}`, inline: true }
         )
-        .setThumbnail(message.author.displayAvatarURL?.({ dynamic: true }) || '')
+        .setThumbnail(message.author.displayAvatarURL?.({ extension: 'png', size: 256 }) || '')
         .setTimestamp();
 
       await message.channel.send({ embeds: [levelEmbed] }).catch(()=>{});
@@ -383,13 +382,14 @@ async function checkFactionJail() {
       currentMemberIds.add(id);
       
       if (typeof jailState[id] !== 'object') {
-        jailState[id] = { time: 0, lastSeen: now };
+        jailState[id] = { time: 0, lastSeen: now, name: m.name };
       }
-      
+
       const jailTime = Number(m.jail_time || 0);
       const prevTime = Number(jailState[id].time || 0);
-      
+
       jailState[id].lastSeen = now;
+      jailState[id].name = m.name; // Update name in case it changed
 
       if (jailTime > 0) {
         console.log(`${m.name} (${id}): jail_time=${jailTime}, prev=${prevTime}`);
@@ -677,15 +677,19 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.commandName === "jailstatus") {
     const jailed = Object.entries(jailState)
       .filter(([_, data]) => data.time > 0)
-      .map(([id, data]) => `• <@${id}>: ${formatJailTime(data.time)}`)
+      .map(([id, data]) => {
+        const name = data.name || 'Unknown';
+        const profileLink = playerProfileLink(id);
+        return `• [${name}](${profileLink}): ${formatJailTime(data.time)}`;
+      })
       .join('\n');
-    
+
     const embed = new EmbedBuilder()
       .setTitle('🚨 Current Jail Status')
       .setDescription(jailed || 'Nobody\'s in the chambers rn! Everyone\'s being good :)')
       .setColor(jailed ? 0xFF6B6B : 0x57F287)
       .setTimestamp();
-    
+
     await interaction.reply({ embeds: [embed], ephemeral: true });
   }
 
@@ -1036,6 +1040,7 @@ async function handleClientReady() {
   }
 }
 
-client.once('ready', handleClientReady);
+// Use clientReady for Discord.js v14+ (ready is deprecated)
+client.once('clientReady', handleClientReady);
 
 client.login(DISCORD_TOKEN);
