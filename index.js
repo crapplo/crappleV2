@@ -97,6 +97,7 @@ const COOLDOWN_MS = 2000;
 const SPAM_THRESHOLD = 10; // Max messages allowed in window
 const SPAM_WINDOW_MS = 5000; // 5 second window
 const SPAM_WARN_COOLDOWN = 30000; // 30 seconds between spam warnings
+const SPAM_TIMEOUT_DURATION = 60; // Timeout duration in seconds
 
 // Helper functions for saving data
 function saveConfig() {
@@ -371,8 +372,18 @@ client.on('messageCreate', async (message) => {
     if (recentMessages.length > SPAM_THRESHOLD) {
       const lastWarn = message.author.lastSpamWarn || 0;
       if (now - lastWarn > SPAM_WARN_COOLDOWN) {
-        message.channel.send(`Hey <@${message.author.id}>, slow down! Spam messages don't count for XP 🙄`);
-        message.author.lastSpamWarn = now;
+        try {
+          // Timeout the member
+          if (message.member && message.member.moderatable) {
+            await message.member.timeout(SPAM_TIMEOUT_DURATION * 1000, 'Spam detected');
+            message.channel.send(`Hey <@${message.author.id}>, you've been timed out for ${SPAM_TIMEOUT_DURATION} seconds for spamming! Take a chill pill 😤`);
+          } else {
+            message.channel.send(`Hey <@${message.author.id}>, slow down! Spam messages don't count for XP 🙄`);
+          }
+          message.author.lastSpamWarn = now;
+        } catch (err) {
+          console.error('Failed to timeout member:', err);
+        }
       }
       return;
     }
