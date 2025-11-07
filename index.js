@@ -1156,6 +1156,9 @@ async function handleClientReady() {
   try {
     console.log(`Logged in as ${client.user?.tag || 'unknown user'}!`);
 
+    // Set bot status
+    client.user.setActivity('mommy ASMR', { type: 2 }); // Type 2 is "Listening to"
+    
     unverifiedRoleId = config.unverifiedRoleId || null;
     welcomeChannelId = config.welcomeChannelId || null;
 
