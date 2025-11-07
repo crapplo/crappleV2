@@ -391,7 +391,6 @@ client.on('messageCreate', async (message) => {
     // Normal XP handling
     const key = `${message.guild.id}_${message.author.id}`;
     const last = xpCooldowns.get(key) || 0;
-    const now = Date.now();
     if (now - last < COOLDOWN_MS) return;
     xpCooldowns.set(key, now);
 
