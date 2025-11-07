@@ -95,7 +95,7 @@ const XP_MIN = 5;
 const XP_MAX = 15;
 const COOLDOWN_MS = 2000;
 const SPAM_THRESHOLD = 10; // Max messages allowed in window
-const SPAM_WINDOW_MS = 5000; // 5 second window
+const SPAM_WINDOW_MS = 7000; // 5 second window
 const SPAM_WARN_COOLDOWN = 30000; // 30 seconds between spam warnings
 const SPAM_TIMEOUT_DURATION = 60; // Timeout duration in seconds
 
@@ -373,16 +373,65 @@ client.on('messageCreate', async (message) => {
       const lastWarn = message.author.lastSpamWarn || 0;
       if (now - lastWarn > SPAM_WARN_COOLDOWN) {
         try {
-          // Timeout the member
+          // Timeout the member if possible
           if (message.member && message.member.moderatable) {
             await message.member.timeout(SPAM_TIMEOUT_DURATION * 1000, 'Spam detected');
-            message.channel.send(`Hey <@${message.author.id}>, you've been timed out for ${SPAM_TIMEOUT_DURATION} seconds for spamming! Take a chill pill 😤`);
+            // Try to delete recent spam messages from this user in the channel
+            try {
+              const canManage = message.channel.permissionsFor?.(client.user)?.has?.('ManageMessages');
+              if (canManage) {
+                const fetched = await message.channel.messages.fetch({ limit: 100 });
+                const toDelete = fetched.filter(
+                  m => m.author.id === message.author.id && (now - m.createdTimestamp) < SPAM_WINDOW_MS
+                );
+                if (toDelete.size > 0) {
+                  try {
+                    await message.channel.bulkDelete(toDelete, true);
+                  } catch (bulkErr) {
+                    // Bulk delete can fail for various reasons; fall back to individual deletes
+                    for (const msg of toDelete.values()) {
+                      try { await msg.delete().catch(()=>{}); } catch(_) {}
+                    }
+                  }
+                }
+              } else {
+                // If bot can't manage messages, at least try to delete the triggering message
+                await message.delete().catch(()=>{});
+              }
+            } catch (delErr) {
+              console.error('Failed to delete spam messages:', delErr);
+            }
+
+            await message.channel.send(`Hey <@${message.author.id}>, you've been timed out for ${SPAM_TIMEOUT_DURATION} seconds for spamming! Your recent spam messages were removed.`).catch(()=>{});
           } else {
-            message.channel.send(`Hey <@${message.author.id}>, slow down! Spam messages don't count for XP 🙄`);
+            // No moderation permission to timeout; try deleting messages if possible, otherwise warn
+            try {
+              const canManage = message.channel.permissionsFor?.(client.user)?.has?.('ManageMessages');
+              if (canManage) {
+                const fetched = await message.channel.messages.fetch({ limit: 100 });
+                const toDelete = fetched.filter(
+                  m => m.author.id === message.author.id && (now - m.createdTimestamp) < SPAM_WINDOW_MS
+                );
+                if (toDelete.size > 0) {
+                  try {
+                    await message.channel.bulkDelete(toDelete, true);
+                  } catch (bulkErr) {
+                    for (const msg of toDelete.values()) {
+                      try { await msg.delete().catch(()=>{}); } catch(_) {}
+                    }
+                  }
+                }
+                await message.channel.send(`Hey <@${message.author.id}>, slow down! Spam messages don't count for XP. Recent spam messages were removed.`).catch(()=>{});
+              } else {
+                await message.channel.send(`Hey <@${message.author.id}>, slow down! Spam messages don't count for XP 🙄`).catch(()=>{});
+              }
+            } catch (err) {
+              console.error('Failed during non-timeout spam deletion:', err);
+            }
           }
           message.author.lastSpamWarn = now;
         } catch (err) {
-          console.error('Failed to timeout member:', err);
+          console.error('Failed to timeout member or delete spam messages:', err);
         }
       }
       return;
