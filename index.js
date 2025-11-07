@@ -422,9 +422,9 @@ client.on('messageCreate', async (message) => {
                     }
                   }
                 }
-                await message.channel.send(`Hey <@${message.author.id}>, slow down! Spam messages don't count for XP. Recent spam messages were removed.`).catch(()=>{});
+                await message.channel.send(`Hey <@${message.author.id}>, slow down! \nSpam messages don't count for XP. \nRecent spam messages were removed.`).catch(()=>{});
               } else {
-                await message.channel.send(`Hey <@${message.author.id}>, slow down! Spam messages don't count for XP 🙄`).catch(()=>{});
+                await message.channel.send(`Hey <@${message.author.id}>, slow down! \nSpam messages don't count for XP 🙄`).catch(()=>{});
               }
             } catch (err) {
               console.error('Failed during non-timeout spam deletion:', err);
