@@ -90,9 +90,13 @@ let xpData = fs.existsSync(XP_FILE)
   : {};
 
 const xpCooldowns = new Map();
+const messageCounters = new Map(); // Track recent messages per user
 const XP_MIN = 5;
 const XP_MAX = 15;
 const COOLDOWN_MS = 2000;
+const SPAM_THRESHOLD = 10; // Max messages allowed in window
+const SPAM_WINDOW_MS = 5000; // 5 second window
+const SPAM_WARN_COOLDOWN = 30000; // 30 seconds between spam warnings
 
 // Helper functions for saving data
 function saveConfig() {
@@ -346,13 +350,34 @@ client.on('messageReactionRemove', async (reaction, user) => {
   }
 });
 
-// Add messageCreate handler for XP awarding with cooldown
+// Modify messageCreate handler:
 client.on('messageCreate', async (message) => {
   try {
     if (message.author.bot) return;
     if (!message.guild) return;
     if (!message.channel || (message.channel && !message.channel.isTextBased())) return;
 
+    // Spam detection
+    const spamKey = `${message.guild.id}_${message.author.id}`;
+    const now = Date.now();
+    const userMessages = messageCounters.get(spamKey) || [];
+    
+    // Clean old messages from counter
+    const recentMessages = userMessages.filter(timestamp => now - timestamp < SPAM_WINDOW_MS);
+    recentMessages.push(now);
+    messageCounters.set(spamKey, recentMessages);
+
+    // Check for spam
+    if (recentMessages.length > SPAM_THRESHOLD) {
+      const lastWarn = message.author.lastSpamWarn || 0;
+      if (now - lastWarn > SPAM_WARN_COOLDOWN) {
+        message.channel.send(`Hey <@${message.author.id}>, slow down! Spam messages don't count for XP 🙄`);
+        message.author.lastSpamWarn = now;
+      }
+      return;
+    }
+
+    // Normal XP handling
     const key = `${message.guild.id}_${message.author.id}`;
     const last = xpCooldowns.get(key) || 0;
     const now = Date.now();
