@@ -452,17 +452,17 @@ async function checkFactionJail() {
       // NEWLY JAILED
       if (jailTime > 0 && prevTime === 0) {
         const embed = new EmbedBuilder()
-          .setTitle("🚨 OH NO THEY GOT ARRESTED")
+          .setTitle(`🚨 ${m.name} GOT ARRESTED`)
           .setDescription(`${m.name} just got thrown in the chambers lmaooo`)
           .addFields(
             { name: "Time left", value: formatJailTime(jailTime), inline: true },
-            { name: "Profile", value: `[go laugh at them](${playerProfileLink(id)})`, inline: true }
+            { name: "Profile", value: `[link for visitors](${playerProfileLink(id)})`, inline: true }
           )
           .setColor(0xFF6B6B)
           .setTimestamp();
 
         await channel.send({
-          content: `<@&${config.roleId}> yo ${m.name} got jailed`,
+          content: `<@&${config.roleId}> ${m.name} got jailed`,
           embeds: [embed]
         });
       }
@@ -484,7 +484,7 @@ async function checkFactionJail() {
       // JAIL TIME INCREASED
       if (prevTime > 0 && jailTime > prevTime + 60) {
         const embed = new EmbedBuilder()
-          .setTitle("🔄 LMAO THEY GOT JAILED AGAIN")
+          .setTitle(`🔄 LMAO ${m.name} GOT JAILED AGAIN`)
           .setDescription(`${m.name} got bailed but went right back in HAHAHA`)
           .addFields(
             { name: "New sentence", value: formatJailTime(jailTime), inline: true },
