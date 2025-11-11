@@ -1169,7 +1169,7 @@ client.on("interactionCreate", async (interaction) => {
     const entries = Object.entries(notOcState).filter(([_, data]) => data.last_not_in_oc !== null);
     
     if (entries.length === 0) {
-      return interaction.reply({ content: "Everyone's in OC or no data available! 🎉", ephemeral: false });
+      return interaction.reply({ content: "Everyone's in OC or no data available! 🎉"});
     }
     
     // Sort by duration (longest not in OC first)
@@ -1202,7 +1202,7 @@ client.on("interactionCreate", async (interaction) => {
       embed.setDescription(truncated + `\n\n*... and ${entries.length - 50} more*`);
     }
 
-    await interaction.reply({ embeds: [embed], ephemeral: true });
+    await interaction.reply({ embeds: [embed]});
   }
 });
 
