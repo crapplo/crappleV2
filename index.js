@@ -98,8 +98,8 @@ const XP_MAX = 15;
 const COOLDOWN_MS = 2000;
 //const SPAM_THRESHOLD = 1    //FOR TESTING
 const SPAM_THRESHOLD = 10; // Max messages allowed in window
-const SPAM_WINDOW_MS = 7000; // 5 second window
-const SPAM_WARN_COOLDOWN = 15000; // 30 seconds between spam warnings
+const SPAM_WINDOW_MS = 7000; // 7 second window
+const SPAM_WARN_COOLDOWN = 15000; // 15 seconds between spam warnings
 const SPAM_TIMEOUT_DURATION = 67; // Timeout duration in seconds
 
 let notOcState = {}; // { [player_id]: { name, last_not_in_oc: number|null, lastSeen: number } }
@@ -787,7 +787,6 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.editReply(`❌ API Error: ${JSON.stringify(data.error, null, 2)}`);
       }
 
-      // Log raw API response structure for debugging
       console.log('Raw API response keys:', Object.keys(data));
       if (data.members) {
         const firstMemberKey = Object.keys(data.members)[0];
@@ -1066,9 +1065,8 @@ client.on("interactionCreate", async (interaction) => {
 
     await interaction.editReply({ 
       content: '✅ Event created! People can now RSVP with reactions.', 
-      ephemeral: true 
+      ephemeral: true
     });
-
     console.log(`[COMMAND] ${interaction.user.tag} created event: ${title} at ${timeStr}${role ? ` (pinging ${role.name})` : ''}`);
   }
 
@@ -1165,6 +1163,47 @@ client.on("interactionCreate", async (interaction) => {
     const id = config.notOcChannelId || "(not set)";
     await interaction.reply({ content: `Configured Not-in-OC channel id: ${id}`, ephemeral: true });
   }
+
+  if (interaction.commandName === "oc") {
+    const now = Date.now();
+    const entries = Object.entries(notOcState).filter(([_, data]) => data.last_not_in_oc !== null);
+    
+    if (entries.length === 0) {
+      return interaction.reply({ content: "Everyone's in OC or no data available! 🎉", ephemeral: true });
+    }
+    
+    // Sort by duration (longest not in OC first)
+    entries.sort((a, b) => {
+      const durationA = a[1].last_not_in_oc ? now - a[1].last_not_in_oc : 0;
+      const durationB = b[1].last_not_in_oc ? now - b[1].last_not_in_oc : 0;
+      return durationB - durationA;
+    });
+    
+    const lines = entries.map(([id, data]) => {
+      const name = data.name || "Unknown";
+      const lastNotInOc = data.last_not_in_oc;
+      const durationSeconds = lastNotInOc ? Math.floor((now - lastNotInOc) / 1000) : null;
+      const durationStr = durationSeconds !== null ? formatDuration(durationSeconds) : "N/A";
+      const profileLink = playerProfileLink(id);
+
+      return `• [${name}](${profileLink}) - not in OC for **${durationStr}**`;
+    });
+    
+    const embed = new EmbedBuilder()
+      .setTitle("🚨 Players Not in Organized Crime")
+      .setDescription(lines.join("\n") || "Everyone's in OC!")
+      .setColor(0xFF6B6B)
+      .setFooter({ text: `Total: ${entries.length} player(s)` })
+      .setTimestamp();
+
+    // If description is too long, split into multiple embeds or truncate
+    if (embed.data.description.length > 4096) {
+      const truncated = lines.slice(0, 50).join("\n");
+      embed.setDescription(truncated + `\n\n*... and ${entries.length - 50} more*`);
+    }
+
+    await interaction.reply({ embeds: [embed], ephemeral: true });
+  }
 });
 
 // Register all slash commands
@@ -1198,36 +1237,16 @@ async function registerCommands() {
     new SlashCommandBuilder()
       .setName("rolereact")
       .setDescription("Create a role reaction message")
-      .addRoleOption(option =>
-        option.setName("role1").setDescription("First role").setRequired(true)
-      )
-      .addStringOption(option =>
-        option.setName("emoji1").setDescription("First emoji").setRequired(true)
-      )
-      .addRoleOption(option =>
-        option.setName("role2").setDescription("Second role").setRequired(false)
-      )
-      .addStringOption(option =>
-        option.setName("emoji2").setDescription("Second emoji").setRequired(false)
-      )
-      .addRoleOption(option =>
-        option.setName("role3").setDescription("Third role").setRequired(false)
-      )
-      .addStringOption(option =>
-        option.setName("emoji3").setDescription("Third emoji").setRequired(false)
-      )
-      .addRoleOption(option =>
-        option.setName("role4").setDescription("Fourth role").setRequired(false)
-      )
-      .addStringOption(option =>
-        option.setName("emoji4").setDescription("Fourth emoji").setRequired(false)
-      )
-      .addRoleOption(option =>
-        option.setName("role5").setDescription("Fifth role").setRequired(false)
-      )
-      .addStringOption(option =>
-        option.setName("emoji5").setDescription("Fifth emoji").setRequired(false)
-      ),
+      .addRoleOption(option => option.setName("role1").setDescription("First role").setRequired(true))
+      .addStringOption(option => option.setName("emoji1").setDescription("First emoji").setRequired(true))
+      .addRoleOption(option => option.setName("role2").setDescription("Second role").setRequired(false))
+      .addStringOption(option => option.setName("emoji2").setDescription("Second emoji").setRequired(false))
+      .addRoleOption(option => option.setName("role3").setDescription("Third role").setRequired(false))
+      .addStringOption(option => option.setName("emoji3").setDescription("Third emoji").setRequired(false))
+      .addRoleOption(option => option.setName("role4").setDescription("Fourth role").setRequired(false))
+      .addStringOption(option => option.setName("emoji4").setDescription("Fourth emoji").setRequired(false))
+      .addRoleOption(option => option.setName("role5").setDescription("Fifth role").setRequired(false))
+      .addStringOption(option => option.setName("emoji5").setDescription("Fifth emoji").setRequired(false)),
     new SlashCommandBuilder()
       .setName("setwelcome")
       .setDescription("Set the welcome message channel")
@@ -1253,13 +1272,13 @@ async function registerCommands() {
         option.setName("description").setDescription("Event description").setRequired(false)
       )
       .addRoleOption(option =>
-        option.setName("role").setDescription("Role to ping for the event").setRequired(false)
+        option.setName("role").setDescription("Role to ping (requires Manage Messages permission)").setRequired(false)
       ),
     new SlashCommandBuilder()
       .setName("profile")
       .setDescription("View your XP profile or someone else's")
       .addUserOption(option =>
-        option.setName("user").setDescription("User to check (default: you)").setRequired(false)
+        option.setName("user").setDescription("User to check (leave blank for yourself)").setRequired(false)
       ),
     new SlashCommandBuilder()
       .setName("leaderboard")
@@ -1268,11 +1287,14 @@ async function registerCommands() {
       .setName("setnotoc")
       .setDescription("Configure daily Not-in-OC report channel")
       .addChannelOption(option =>
-        option.setName("channel").setDescription("Channel to post daily Not-in-OC report").setRequired(true)
+        option.setName("channel").setDescription("Channel for Not-in-OC reports").setRequired(true)
       ),
     new SlashCommandBuilder()
       .setName("getnotoc")
-      .setDescription("Show configured Not-in-OC report channel id")
+      .setDescription("Show configured Not-in-OC report channel id"),
+    new SlashCommandBuilder()
+      .setName("oc")
+      .setDescription("Show players not in organized crime and how long they've been out")
   ].map(cmd => cmd.toJSON());
 
   try {
