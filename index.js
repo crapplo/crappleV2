@@ -26,6 +26,8 @@ const CONFIG_FILE = "./config.json";
 const STATE_FILE = "./jailstate.json";
 const ROLE_REACT_FILE = "./rolereact.json";
 const XP_FILE = "./xp.json";
+// Add CSV persistence for "not in organised crime"
+const NOT_OC_CSV = "./not_oc.csv";
 
 // Validate required environment variables
 if (!DISCORD_TOKEN) {
@@ -100,6 +102,8 @@ const SPAM_WINDOW_MS = 7000; // 5 second window
 const SPAM_WARN_COOLDOWN = 15000; // 30 seconds between spam warnings
 const SPAM_TIMEOUT_DURATION = 67; // Timeout duration in seconds
 
+let notOcState = {}; // { [player_id]: { name, last_not_in_oc: number|null, lastSeen: number } }
+
 // Helper functions for saving data
 function saveConfig() {
   try {
@@ -133,6 +137,19 @@ function saveXp() {
     fs.writeFileSync(XP_FILE, JSON.stringify(xpData, null, 2));
   } catch (e) {
     console.error("Couldn't save XP:", e);
+  }
+}
+
+function saveNotOcCsv() {
+  try {
+    const rows = [["player_id","name","last_not_in_oc","lastSeen"]];
+    for (const [id, rec] of Object.entries(notOcState)) {
+      // wrap name in quotes to allow commas
+      rows.push([id, `"${String(rec.name).replace(/"/g,'""')}"`, rec.last_not_in_oc || "", rec.lastSeen || ""]);
+    }
+    fs.writeFileSync(NOT_OC_CSV, rows.map(r => r.join(',')).join("\n"));
+  } catch (e) {
+    console.error("Failed to save not_oc CSV:", e);
   }
 }
 
@@ -585,6 +602,30 @@ async function checkFactionJail() {
       }
 
       jailState[id].time = jailTime;
+
+      const inOc = isInOrganisedCrime(m);
+      // ensure notOcState entry exists
+      if (!notOcState[id]) {
+        notOcState[id] = { name: m.name || jailState[id].name || "Unknown", last_not_in_oc: null, lastSeen: now };
+      } else {
+        notOcState[id].name = m.name || notOcState[id].name;
+        notOcState[id].lastSeen = now;
+      }
+
+      if (!inOc) {
+        // currently NOT in organised crime - ensure a "start" timestamp
+        if (!notOcState[id].last_not_in_oc) {
+          notOcState[id].last_not_in_oc = now;
+          console.log(`Tracking ${m.name} (${id}) as NOT in OC starting ${new Date(now).toISOString()}`);
+        }
+      } else {
+        // currently IN an organised crime - clear the "not in" start
+        if (notOcState[id].last_not_in_oc) {
+          // keep lastSeen, but clear last_not_in_oc so future report ignores them
+          notOcState[id].last_not_in_oc = null;
+          console.log(`${m.name} (${id}) is now in OC; clearing not-in-OC timer`);
+        }
+      }
     }
 
     // Clean up old entries (7 day retention)
@@ -598,10 +639,71 @@ async function checkFactionJail() {
     }
 
     saveState();
+    saveNotOcCsv();
   } catch (err) {
     console.error("Jail check went boom:", err);
   }
 }
+
+// Utility: decide if a member is in an Organised crime (tries multiple possible API fields)
+function isInOrganisedCrime(member) {
+  try {
+    // If API provides an explicit boolean/flag
+    if (member.organised_crime || member.organisedCrime || member.organisedcrime) return true;
+    // count fields
+    if (typeof member.organised_crime_count === 'number' && member.organised_crime_count > 0) return true;
+    if (typeof member.organisedCrimeCount === 'number' && member.organisedCrimeCount > 0) return true;
+    // status could contain nested info
+    const s = member.status || {};
+    if (s.organised_crime || s.organisedCrime || s.organisedcrime) return true;
+    // sometimes status might include string tags
+    if (typeof s.state === 'string' && /organis|organis?ed|crime/i.test(s.state)) return true;
+    // fallback: not detected -> assume NOT in organised crime
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Small duration formatting for "how long not in OC"
+function formatDuration(seconds) {
+  seconds = Math.max(0, Math.floor(seconds));
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${seconds}s`;
+}
+
+// Load prior CSV at startup
+function loadNotOcCsv() {
+  try {
+    if (!fs.existsSync(NOT_OC_CSV)) return;
+    const raw = fs.readFileSync(NOT_OC_CSV, "utf8").trim();
+    if (!raw) return;
+    const lines = raw.split(/\r?\n/);
+    const header = lines.shift(); // skip header
+    for (const ln of lines) {
+      if (!ln) continue;
+      // CSV: player_id,name,last_not_in_oc,lastSeen
+      const parts = ln.split(',').map(s => s.replace(/^"|"$/g, ''));
+      const [player_id, name, last_not_in_oc, lastSeen] = parts;
+      notOcState[String(player_id)] = {
+        name: name || "Unknown",
+        last_not_in_oc: last_not_in_oc ? Number(last_not_in_oc) : null,
+        lastSeen: lastSeen ? Number(lastSeen) : Date.now()
+      };
+    }
+    console.log(`Loaded not_oc CSV with ${Object.keys(notOcState).length} rows`);
+  } catch (e) {
+    console.error("Failed to load not_oc CSV:", e);
+  }
+}
+
+// Load existing CSV if present
+loadNotOcCsv();
 
 // Command handler
 client.on("interactionCreate", async (interaction) => {
@@ -1045,6 +1147,24 @@ client.on("interactionCreate", async (interaction) => {
       await interaction.editReply(`❌ Debug failed: ${err.message}`);
     }
   }
+
+  if (interaction.commandName === "setnotoc") {
+    if (!interaction.member.permissions.has('Administrator')) {
+      return interaction.reply({ content: '❌ admins only', ephemeral: true });
+    }
+    const channel = interaction.options.getChannel("channel");
+    if (!channel || !channel.isTextBased()) {
+      return interaction.reply({ content: '❌ pick a text channel', ephemeral: true });
+    }
+    config.notOcChannelId = channel.id;
+    saveConfig();
+    await interaction.reply({ content: `✅ Daily Not-in-OC reports will be posted to ${channel} (ID: ${channel.id})`, ephemeral: true });
+  }
+
+  if (interaction.commandName === "getnotoc") {
+    const id = config.notOcChannelId || "(not set)";
+    await interaction.reply({ content: `Configured Not-in-OC channel id: ${id}`, ephemeral: true });
+  }
 });
 
 // Register all slash commands
@@ -1143,7 +1263,16 @@ async function registerCommands() {
       ),
     new SlashCommandBuilder()
       .setName("leaderboard")
-      .setDescription("View the XP leaderboard")
+      .setDescription("View the XP leaderboard"),
+    new SlashCommandBuilder()
+      .setName("setnotoc")
+      .setDescription("Configure daily Not-in-OC report channel")
+      .addChannelOption(option =>
+        option.setName("channel").setDescription("Channel to post daily Not-in-OC report").setRequired(true)
+      ),
+    new SlashCommandBuilder()
+      .setName("getnotoc")
+      .setDescription("Show configured Not-in-OC report channel id")
   ].map(cmd => cmd.toJSON());
 
   try {
