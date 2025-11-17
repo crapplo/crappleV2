@@ -748,7 +748,7 @@ client.on("interactionCreate", async (interaction) => {
         .setTitle("🚨 OH NO THEY GOT ARRESTED (test)")
         .setDescription("TestyMcTest just got thrown in the chambers lmaooo")
         .addFields(
-          { name: "Time left", value: `69m (nice)`, inline: true },
+          { name: "When", value: `69m (nice)`, inline: true },
           { name: "Profile", value: `[go laugh at them](https://www.torn.com/profiles.php?XID=12345)`, inline: true }
         )
         .setColor(0xFF6B6B)
@@ -1204,6 +1204,117 @@ client.on("interactionCreate", async (interaction) => {
 
     await interaction.reply({ embeds: [embed]});
   }
+
+  if (interaction.commandName === "notinoc") {
+    await interaction.deferReply({ ephemeral: true }).catch(()=>{});
+    try {
+      const report = buildNotInOcReportText(1900);
+      await interaction.editReply({ content: report });
+    } catch (err) {
+      console.error("Failed to build/send not-in-OC report:", err);
+      await interaction.editReply({ content: "❌ Failed to generate report, check logs.", ephemeral: true });
+    }
+  }
+
+  if (interaction.commandName === "vote") {
+    const text = interaction.options.getString("text");
+    const emojis = [];
+    for (let i = 1; i <= 5; i++) {
+      const emoji = interaction.options.getString(`emoji${i}`);
+      if (emoji) emojis.push(emoji);
+    }
+    if (emojis.length < 2) {
+      return interaction.reply({ content: "❌ You must provide at least 2 emoji choices.", ephemeral: true });
+    }
+
+    // Build initial embed
+    const embed = new EmbedBuilder()
+      .setTitle("🗳️ Poll")
+      .setDescription(text)
+      .addFields(emojis.map((emoji, idx) => ({
+        name: `Choice ${idx + 1}`,
+        value: `${emoji} — **0** votes`,
+        inline: false
+      })))
+      .setColor(0x5865F2)
+      .setFooter({ text: `Poll by ${interaction.user.tag}` })
+      .setTimestamp();
+
+    await interaction.reply({ content: "Poll created!", ephemeral: true });
+
+    const msg = await interaction.channel.send({ embeds: [embed] });
+
+    // React with each emoji
+    for (const emoji of emojis) {
+      try { await msg.react(emoji); } catch (err) { console.warn(`Failed to react with ${emoji}:`, err); }
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    // Set up live vote counting
+    const voteCounts = new Map(); // emoji -> Set of user ids
+    for (const emoji of emojis) {
+      voteCounts.set(emoji, new Set());
+    }
+
+    // Only allow one choice per person, remove others
+    function clearOtherVotes(userId, selectedEmoji) {
+      for (const [emoji, set] of voteCounts.entries()) {
+        if (emoji !== selectedEmoji) set.delete(userId);
+      }
+    }
+
+    const filter = (reaction, user) => !user.bot && emojis.includes(reaction.emoji.name || reaction.emoji.id || reaction.emoji.toString());
+
+    const collector = msg.createReactionCollector({ filter, time: 60 * 60 * 1000 }); // 1 hour poll
+
+    collector.on('collect', async (reaction, user) => {
+      const emoji = reaction.emoji.name || reaction.emoji.id || reaction.emoji.toString();
+      voteCounts.get(emoji)?.add(user.id);
+      clearOtherVotes(user.id, emoji);
+
+      // Remove user's other reactions
+      for (const [otherEmoji] of voteCounts.entries()) {
+        if (otherEmoji !== emoji) {
+          const r = msg.reactions.cache.get(otherEmoji);
+          if (r) await r.users.remove(user.id).catch(()=>{});
+        }
+      }
+
+      // Update embed counts
+      const updatedEmbed = EmbedBuilder.from(msg.embeds[0])
+        .setFields(emojis.map((e, idx) => ({
+          name: `Choice ${idx + 1}`,
+          value: `${e} — **${voteCounts.get(e)?.size || 0}** votes`,
+          inline: false
+        })));
+      await msg.edit({ embeds: [updatedEmbed] });
+    });
+
+    collector.on('remove', async (reaction, user) => {
+      const emoji = reaction.emoji.name || reaction.emoji.id || reaction.emoji.toString();
+      voteCounts.get(emoji)?.delete(user.id);
+
+      // Update embed counts
+      const updatedEmbed = EmbedBuilder.from(msg.embeds[0])
+        .setFields(emojis.map((e, idx) => ({
+          name: `Choice ${idx + 1}`,
+          value: `${e} — **${voteCounts.get(e)?.size || 0}** votes`,
+          inline: false
+        })));
+      await msg.edit({ embeds: [updatedEmbed] });
+    });
+
+    collector.on('end', async () => {
+      const finalEmbed = EmbedBuilder.from(msg.embeds[0])
+        .setTitle("🗳️ Poll (Closed)")
+        .setFields(emojis.map((e, idx) => ({
+          name: `Choice ${idx + 1}`,
+          value: `${e} — **${voteCounts.get(e)?.size || 0}** final votes`,
+          inline: false
+        })));
+      await msg.edit({ embeds: [finalEmbed] });
+    });
+  }
 });
 
 // Register all slash commands
@@ -1294,7 +1405,22 @@ async function registerCommands() {
       .setDescription("Show configured Not-in-OC report channel id"),
     new SlashCommandBuilder()
       .setName("oc")
-      .setDescription("Show players not in organized crime and how long they've been out")
+      .setDescription("Show players not in organized crime and how long they've been out"),
+    new SlashCommandBuilder()
+      .setName("vote")
+      .setDescription("Start a poll that users can vote on using emojis")
+      .addStringOption(option =>
+        option.setName("text").setDescription("The poll question or description").setRequired(true))
+      .addStringOption(option =>
+        option.setName("emoji1").setDescription("Emoji for choice 1").setRequired(true))
+      .addStringOption(option =>
+        option.setName("emoji2").setDescription("Emoji for choice 2").setRequired(true))
+      .addStringOption(option =>
+        option.setName("emoji3").setDescription("Emoji for choice 3").setRequired(false))
+      .addStringOption(option =>
+        option.setName("emoji4").setDescription("Emoji for choice 4").setRequired(false))
+      .addStringOption(option =>
+        option.setName("emoji5").setDescription("Emoji for choice 5").setRequired(false)),
   ].map(cmd => cmd.toJSON());
 
   try {
