@@ -92,7 +92,8 @@ let xpData = fs.existsSync(XP_FILE)
   : {};
 
 const xpCooldowns = new Map();
-const messageCounters = new Map(); // Track recent messages per user
+const messageCounters = new Map(); // Track recent messages per user (per channel)
+const crossChannelSpam = new Map(); // Track spam across all channels: { userId: [{ timestamp, channelId }, ...] }
 const XP_MIN = 5;
 const XP_MAX = 15;
 const COOLDOWN_MS = 2000;
@@ -100,7 +101,10 @@ const COOLDOWN_MS = 2000;
 const SPAM_THRESHOLD = 10; // Max messages allowed in window
 const SPAM_WINDOW_MS = 7000; // 7 second window
 const SPAM_WARN_COOLDOWN = 15000; // 15 seconds between spam warnings
-const SPAM_TIMEOUT_DURATION = 67; // Timeout duration in seconds
+const SPAM_TIMEOUT_DURATION = 67; // Timeout duration in seconds (1 minute)
+const CROSS_CHANNEL_SPAM_THRESHOLD = 15; // Messages in different channels within time window
+const CROSS_CHANNEL_SPAM_WINDOW = 10000; // 10 second window
+const CROSS_CHANNEL_TIMEOUT_DURATION = 12 * 60 * 60; // 12 hours in seconds
 
 let notOcState = {}; // { [player_id]: { name, last_not_in_oc: number|null, lastSeen: number } }
 
@@ -372,6 +376,60 @@ client.on('messageReactionRemove', async (reaction, user) => {
   }
 });
 
+// ========== CROSS-CHANNEL SPAM DETECTION ==========
+async function checkCrossChannelSpam(message) {
+  const now = Date.now();
+  const userId = message.author.id;
+  const guildId = message.guild.id;
+  const channelId = message.channel.id;
+
+  const crossKey = `${guildId}_${userId}`;
+  const userCrossSpam = crossChannelSpam.get(crossKey) || [];
+  
+  // Clean old messages outside the window
+  const recentCrossSpam = userCrossSpam.filter(msg => now - msg.timestamp < CROSS_CHANNEL_SPAM_WINDOW);
+  recentCrossSpam.push({ timestamp: now, channelId });
+  crossChannelSpam.set(crossKey, recentCrossSpam);
+  
+  // Count unique channels spammed in
+  const uniqueChannels = new Set(recentCrossSpam.map(msg => msg.channelId));
+  
+  // If spamming across multiple channels, timeout for 12 hours
+  if (recentCrossSpam.length > CROSS_CHANNEL_SPAM_THRESHOLD && uniqueChannels.size > 2) {
+    if (message.member && message.member.moderatable) {
+      try {
+        await message.member.timeout(CROSS_CHANNEL_TIMEOUT_DURATION * 1000, 'Cross-channel spam detected');
+        
+        // Notify mods
+        try {
+          const fetchedMsgs = await message.channel.messages.fetch({ limit: 50 });
+          const toDelete = fetchedMsgs.filter(m => m.author.id === userId && now - m.createdTimestamp < CROSS_CHANNEL_SPAM_WINDOW);
+          if (toDelete.size > 0) {
+            try {
+              await message.channel.bulkDelete(toDelete, true).catch(()=>{});
+            } catch (bulkErr) {
+              for (const msg of toDelete.values()) {
+                try { await msg.delete().catch(()=>{}); } catch(_) {}
+              }
+            }
+          }
+        } catch (delErr) {
+          console.error('Failed to delete cross-channel spam messages:', delErr);
+        }
+        
+        await message.channel.send(`🚨 <@${userId}> has been timed out for **12 hours** due to cross-channel spamming!`).catch(()=>{});
+        console.log(`[SPAM] ${message.author.tag} timed out for 12 hours - cross-channel spam across ${uniqueChannels.size} channels`);
+        crossChannelSpam.delete(crossKey);
+        return true; // Return true if timed out
+      } catch (err) {
+        console.error('Failed to timeout cross-channel spammer:', err);
+      }
+    }
+  }
+  
+  return false; // Not a cross-channel spam violation
+}
+
 // Modify messageCreate handler:
 client.on('messageCreate', async (message) => {
   try {
@@ -379,9 +437,17 @@ client.on('messageCreate', async (message) => {
     if (!message.guild) return;
     if (!message.channel || (message.channel && !message.channel.isTextBased())) return;
 
-    // Spam detection
-    const spamKey = `${message.guild.id}_${message.author.id}`;
+    // Check for cross-channel spam first (separate system)
+    const isCrossChannelSpam = await checkCrossChannelSpam(message);
+    if (isCrossChannelSpam) return; // Exit if timed out for cross-channel spam
+
     const now = Date.now();
+    const userId = message.author.id;
+    const guildId = message.guild.id;
+
+    // ========== PER-CHANNEL SPAM CHECK (XP spam prevention) ==========
+    // Spam detection
+    const spamKey = `${guildId}_${userId}`;
     const userMessages = messageCounters.get(spamKey) || [];
     
     // Clean old messages from counter
@@ -389,7 +455,7 @@ client.on('messageCreate', async (message) => {
     recentMessages.push(now);
     messageCounters.set(spamKey, recentMessages);
 
-    // Check for spam
+    // Check for spam in single channel
     if (recentMessages.length > SPAM_THRESHOLD) {
       const lastWarn = message.author.lastSpamWarn || 0;
       if (now - lastWarn > SPAM_WARN_COOLDOWN) {
@@ -458,8 +524,9 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // Normal XP handling
-    const key = `${message.guild.id}_${message.author.id}`;
+    // ========== NORMAL XP HANDLING ==========
+    // XP cooldown per user per guild
+    const key = `${guildId}_${userId}`;
     const last = xpCooldowns.get(key) || 0;
     if (now - last < COOLDOWN_MS) return;
     xpCooldowns.set(key, now);
