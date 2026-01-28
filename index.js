@@ -1453,6 +1453,9 @@ async function registerCommands() {
       .setName("oc")
       .setDescription("Show players not in organized crime and how long they've been out"),
     new SlashCommandBuilder()
+      .setName("notinoc")
+      .setDescription("Post the not-in-OC report"),
+    new SlashCommandBuilder()
       .setName("vote")
       .setDescription("Start a poll that users can vote on using emojis")
       .addStringOption(option =>
