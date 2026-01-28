@@ -144,8 +144,11 @@ function saveNotOcCsv() {
   try {
     const rows = [["player_id","name","last_not_in_oc","lastSeen"]];
     for (const [id, rec] of Object.entries(notOcState)) {
-      // wrap name in quotes to allow commas
-      rows.push([id, `"${String(rec.name).replace(/"/g,'""')}"`, rec.last_not_in_oc || "", rec.lastSeen || ""]);
+      // Only save players who are NOT in OC (last_not_in_oc is set)
+      if (rec.last_not_in_oc !== null) {
+        // wrap name in quotes to allow commas
+        rows.push([id, `"${String(rec.name).replace(/"/g,'""')}"`, rec.last_not_in_oc || "", rec.lastSeen || ""]);
+      }
     }
     fs.writeFileSync(NOT_OC_CSV, rows.map(r => r.join(',')).join("\n"));
   } catch (e) {
@@ -675,6 +678,45 @@ function formatDuration(seconds) {
   if (hours > 0) return `${hours}h ${minutes}m`;
   if (minutes > 0) return `${minutes}m`;
   return `${seconds}s`;
+}
+
+// Build text report for players not in OC
+function buildNotInOcReportText(maxChars) {
+  const now = Date.now();
+  const entries = Object.entries(notOcState).filter(([_, data]) => data.last_not_in_oc !== null);
+  
+  if (entries.length === 0) {
+    return "📊 **Not-in-OC Report**\n\nEveryone's in OC! 🎉";
+  }
+  
+  // Sort by duration (longest not in OC first)
+  entries.sort((a, b) => {
+    const durationA = a[1].last_not_in_oc ? now - a[1].last_not_in_oc : 0;
+    const durationB = b[1].last_not_in_oc ? now - b[1].last_not_in_oc : 0;
+    return durationB - durationA;
+  });
+  
+  let report = "📊 **Not-in-OC Report**\n\n";
+  let charCount = report.length;
+  
+  for (const [id, data] of entries) {
+    const name = data.name || "Unknown";
+    const lastNotInOc = data.last_not_in_oc;
+    const durationSeconds = lastNotInOc ? Math.floor((now - lastNotInOc) / 1000) : null;
+    const durationStr = durationSeconds !== null ? formatDuration(durationSeconds) : "N/A";
+    const profileLink = playerProfileLink(id);
+    const line = `• [${name}](${profileLink}) - ${durationStr}\n`;
+    
+    if (charCount + line.length > maxChars) {
+      report += `\n*... and ${entries.length - (entries.indexOf([id, data]) + 1)} more*`;
+      break;
+    }
+    
+    report += line;
+    charCount += line.length;
+  }
+  
+  return report;
 }
 
 // Load prior CSV at startup
