@@ -50,11 +50,6 @@ if (!CLIENT_ID) {
   process.exit(1);
 }
 
-if (!GUILD_ID) {
-  console.error("Missing GUILD_ID in .env - need this to register commands!");
-  process.exit(1);
-}
-
 // Create Discord client
 const client = new Client({
   intents: [
@@ -1540,12 +1535,12 @@ async function registerCommands() {
   ].map(cmd => cmd.toJSON());
 
   try {
-    console.log("Registering slash commands...");
+    console.log("Registering slash commands globally...");
     await rest.put(
-      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+      Routes.applicationCommands(CLIENT_ID),
       { body: commands }
     );
-    console.log("✅ All commands registered successfully!");
+    console.log("✅ All commands registered globally!");
   } catch (err) {
     console.error("Failed to register commands:", err);
   }
