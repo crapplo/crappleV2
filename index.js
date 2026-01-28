@@ -698,6 +698,7 @@ function buildNotInOcReportText(maxChars) {
   
   let report = "📊 **Not-in-OC Report**\n\n";
   let charCount = report.length;
+  let count = 0;
   
   for (const [id, data] of entries) {
     const name = data.name || "Unknown";
@@ -708,12 +709,13 @@ function buildNotInOcReportText(maxChars) {
     const line = `• [${name}](${profileLink}) - ${durationStr}\n`;
     
     if (charCount + line.length > maxChars) {
-      report += `\n*... and ${entries.length - (entries.indexOf([id, data]) + 1)} more*`;
+      report += `\n*... and ${entries.length - count} more*`;
       break;
     }
     
     report += line;
     charCount += line.length;
+    count++;
   }
   
   return report;
