@@ -20,7 +20,7 @@
   },
   "homepage": "https://github.com/crapplo/crappleV2#readme",
   "dependencies": {
-    "discord.js": "^14.22.1",
+    "discord.js": "^13.17.1",
     "dotenv": "^17.2.3",
     "node-fetch": "^3.3.2"
   }
