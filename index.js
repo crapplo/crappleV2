@@ -1189,18 +1189,20 @@ client.on("interactionCreate", async (interaction) => {
       return `• [${name}](${profileLink}) - not in OC for **${durationStr}**`;
     });
     
+    // Build description and check length first
+    let description = lines.join("\n") || "Everyone's in OC!";
+    
+    if (description.length > 4096) {
+      const truncated = lines.slice(0, 50).join("\n");
+      description = truncated + `\n\n*... and ${entries.length - 50} more*`;
+    }
+    
     const embed = new EmbedBuilder()
       .setTitle("🚨 Players Not in Organized Crime")
-      .setDescription(lines.join("\n") || "Everyone's in OC!")
+      .setDescription(description)
       .setColor(0xFF6B6B)
       .setFooter({ text: `Total: ${entries.length} player(s)` })
       .setTimestamp();
-
-    // If description is too long, split into multiple embeds or truncate
-    if (embed.data.description.length > 4096) {
-      const truncated = lines.slice(0, 50).join("\n");
-      embed.setDescription(truncated + `\n\n*... and ${entries.length - 50} more*`);
-    }
 
     await interaction.reply({ embeds: [embed]});
   }
