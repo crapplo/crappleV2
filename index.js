@@ -160,12 +160,24 @@ function saveOcState() {
 
 // ─── CSV HELPERS ──────────────────────────────────────────────────────────────
 
+function tsToHuman(ms) {
+  if (!ms) return "";
+  return new Date(ms).toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
+}
+
 function saveNotOcCsv() {
   try {
-    const rows = [["player_id", "name", "not_in_oc_since", "last_seen"]];
+    const rows = [["player_id", "name", "not_in_oc_since_ts", "not_in_oc_since", "last_seen"]];
     for (const [id, rec] of Object.entries(ocState)) {
-      if (rec.not_in_oc_since) {
-        rows.push([id, `"${String(rec.name).replace(/"/g, '""')}"`, rec.not_in_oc_since, rec.last_seen || ""]);
+      // Skip entries from first check cycle and members currently in OC
+      if (rec.not_in_oc_since && !rec.first_seen) {
+        rows.push([
+          id,
+          `"${String(rec.name).replace(/"/g, '""')}"`,
+          rec.not_in_oc_since,
+          `"${tsToHuman(rec.not_in_oc_since)}"`,
+          rec.last_seen || ""
+        ]);
       }
     }
     fs.writeFileSync(NOT_OC_CSV, rows.map(r => r.join(",")).join("\n"));
@@ -203,9 +215,17 @@ function loadStrikes() {
 
 function saveStrikes(strikes) {
   try {
-    const rows = [["player_id", "name", "reason", "timestamp", "expires_at"]];
+    const rows = [["player_id", "name", "reason", "issued_ts", "issued_at", "expires_ts", "expires_at"]];
     for (const s of strikes) {
-      rows.push([s.player_id, `"${String(s.name).replace(/"/g, '""')}"`, s.reason, s.timestamp, s.expires_at]);
+      rows.push([
+        s.player_id,
+        `"${String(s.name).replace(/"/g, '""')}"`,
+        s.reason,
+        s.timestamp,
+        `"${tsToHuman(s.timestamp)}"`,
+        s.expires_at,
+        `"${tsToHuman(s.expires_at)}"`
+      ]);
     }
     fs.writeFileSync(STRIKES_CSV, rows.map(r => r.join(",")).join("\n"));
   } catch (e) { console.error("Failed to save strikes:", e); }
