@@ -334,41 +334,8 @@ const normalizeMembers = (apiData) => {
   return members;
 };
 
-// ─── OC STATUS HELPERS ───────────────────────────────────────────────────────
-
-/**
- * Returns OC info for a member:
- *   { inOc: bool, isReady: bool, ocName: string|null }
- *
- * Torn API v2 faction members may include an `organised_crime` field:
- *   { id, name, status, time_left, ... }
- * status values seen in the wild: "planning", "ready", "in_progress", "completed"
- * We treat "planning", "ready", "in_progress" all as "in an OC".
- * "ready" specifically means everyone is ready to go but it hasn't been executed yet.
- */
-function getOcInfo(member) {
-  const oc = member.organised_crime;
-  if (!oc) return { inOc: false, isReady: false, ocName: null };
-
-  // If oc is a boolean true (old detection)
-  if (oc === true) return { inOc: true, isReady: false, ocName: null };
-
-  // Object form from v2 API
-  if (typeof oc === "object") {
-    const status = (oc.status || "").toLowerCase();
-    const inOc = ["planning", "ready", "in_progress", "scheduled"].includes(status) || !!oc.id;
-    const isReady = status === "ready";
-    return { inOc, isReady, ocName: oc.name || oc.crime_name || null };
-  }
-
-  // Fallback string check on status field
-  const s = member.status || {};
-  if (typeof s.state === "string" && /organis/i.test(s.state)) {
-    return { inOc: true, isReady: false, ocName: null };
-  }
-
-  return { inOc: false, isReady: false, ocName: null };
-}
+// ─── OC STATUS HELPERS ─────────────────────────────────────────────────────── //
+// getOcInfo removed — OC status now fetched via /v2/faction/crimes endpoint
 
 // ─── SEND HELPER ─────────────────────────────────────────────────────────────
 
@@ -456,28 +423,82 @@ function buildNotInOcReportText(maxChars) {
 }
 
 // ─── OC CHECK (runs every 10 mins) ───────────────────────────────────────────
+//
+// Strategy: the /v2/faction/{id}?selections=members endpoint does NOT include
+// OC data. Instead we call /v2/faction/crimes to get all active crimes and
+// build a Set of member IDs who are currently in one. Anyone not in that set
+// is considered "not in OC".
 
 async function checkOrganisedCrime() {
   console.log("[OC CHECK] Running organised crime check...");
   try {
-    const apiUrl = `https://api.torn.com/v2/faction/${FACTION_ID}?selections=members&key=${TORN_API_KEY}`;
-    const res = await fetch(apiUrl);
-    if (!res.ok) { console.error(`[OC CHECK] API error: ${res.status}`); return; }
-    const data = await res.json();
-    if (data.error) { console.error("[OC CHECK] Torn API error:", data.error); return; }
+    // ── 1. Fetch all faction members ────────────────────────────────────────
+    const membersUrl = `https://api.torn.com/v2/faction/${FACTION_ID}?selections=members&key=${TORN_API_KEY}`;
+    const membersRes = await fetch(membersUrl);
+    if (!membersRes.ok) { console.error(`[OC CHECK] Members API error: ${membersRes.status}`); return; }
+    const membersData = await membersRes.json();
+    if (membersData.error) { console.error("[OC CHECK] Members API error:", membersData.error); return; }
 
-    const members = normalizeMembers(data);
+    const members = normalizeMembers(membersData);
+    if (members.length === 0) { console.warn("[OC CHECK] No members returned from API"); return; }
+
+    // ── 2. Fetch active/planned crimes ──────────────────────────────────────
+    // cat=available returns crimes that are in planning or ready-to-execute state
+    const crimesUrl = `https://api.torn.com/v2/faction/crimes?cat=available&key=${TORN_API_KEY}`;
+    const crimesRes = await fetch(crimesUrl);
+    if (!crimesRes.ok) { console.error(`[OC CHECK] Crimes API error: ${crimesRes.status}`); return; }
+    const crimesData = await crimesRes.json();
+    if (crimesData.error) {
+      console.error("[OC CHECK] Crimes API error:", crimesData.error);
+      // Don't bail entirely — if crimes endpoint errors, we can't tell who's in OC
+      // so skip this cycle rather than falsely marking everyone as not-in-OC
+      return;
+    }
+
+    // ── 3. Build set of member IDs currently in an OC ───────────────────────
+    // Also track which crimes are "ready" (all slots filled, awaiting execution)
+    // crimes response shape: { crimes: [ { id, name, status, slots: [ { user_id, ... } ] } ] }
+    const inOcSet = new Set();      // player_id strings of members in any active OC
+    const readyOcByMember = {};     // player_id -> { ocId, ocName, readySince (from our state) }
+
+    const crimes = crimesData.crimes || [];
+    console.log(`[OC CHECK] Found ${crimes.length} active crime(s)`);
+
+    for (const crime of crimes) {
+      const crimeStatus = (crime.status || "").toLowerCase();
+      // statuses: "planning", "ready" (all slots filled, can execute), "in_progress"
+      const isReady = crimeStatus === "ready";
+      const slots = crime.slots || crime.participants || [];
+
+      for (const slot of slots) {
+        // slot shape varies — try multiple field names
+        const uid = String(slot.user_id || slot.player_id || slot.id || "");
+        if (!uid || uid === "0") continue;
+        inOcSet.add(uid);
+        if (isReady) {
+          readyOcByMember[uid] = {
+            ocId: crime.id,
+            ocName: crime.name || crime.crime_name || "Unknown OC"
+          };
+        }
+      }
+    }
+
+    console.log(`[OC CHECK] ${inOcSet.size} member(s) currently in an OC`);
+
+    // ── 4. Process each member ───────────────────────────────────────────────
     const now = Date.now();
-
     const ocAlertChannelId = config.ocAlertChannelId;
     const delayWarningChannelId = config.delayWarningChannelId;
 
     for (const m of members) {
       const id = String(m.player_id);
       const name = m.name || ocState[id]?.name || "Unknown";
-      const { inOc, isReady, ocName } = getOcInfo(m);
+      const inOc = inOcSet.has(id);
+      const isReady = !!readyOcByMember[id];
+      const ocName = readyOcByMember[id]?.ocName || null;
 
-      // Initialise state entry if missing — NEVER alert on first cycle
+      // First time we've ever seen this member — record silently, no alerts
       if (!ocState[id]) {
         ocState[id] = {
           name,
@@ -487,25 +508,21 @@ async function checkOrganisedCrime() {
           oc_ready_since: null,
           delay_warned: false,
           last_seen: now,
-          // first_seen flag: entry was just created this run.
-          // We skip all alert logic for this cycle so the bot does not
-          // spam warnings/strikes for everyone on startup or first run.
-          first_seen: now
+          first_seen: now  // suppresses alerts this cycle
         };
-        console.log('[OC] First time seeing ' + name + ' (' + id + ') — recording silently, no alerts this cycle');
-        continue; // skip alert logic for brand-new entries
-      } else {
-        ocState[id].name = name;
-        ocState[id].last_seen = now;
+        console.log(`[OC] First time seeing ${name} (${id}) — recording silently`);
+        continue;
       }
 
+      ocState[id].name = name;
+      ocState[id].last_seen = now;
       const state = ocState[id];
 
-      // ── Branch: member IS in an OC ──────────────────────────────────────
+      // ── Branch: member IS in an OC ────────────────────────────────────────
       if (inOc) {
-        // Reset "not in OC" timers when they join one
+        // Reset not-in-OC timer when they join
         if (state.not_in_oc_since !== null) {
-          console.log(`[OC] ${name} joined an OC — resetting not-in-OC timer`);
+          console.log(`[OC] ${name} is now in an OC — resetting timer`);
           state.not_in_oc_since = null;
           state.warned_12h = false;
           state.struck_48h = false;
@@ -516,19 +533,16 @@ async function checkOrganisedCrime() {
           if (!state.oc_ready_since) {
             state.oc_ready_since = now;
             state.delay_warned = false;
-            console.log(`[OC] ${name}'s OC is ready! Starting delay timer.`);
+            console.log(`[OC] ${name}'s OC "${ocName}" is ready — starting delay timer`);
           }
-
-          // Check if they've delayed more than 20 minutes
           const readyDuration = now - state.oc_ready_since;
           if (readyDuration >= OC_DELAY_WARN && !state.delay_warned) {
             state.delay_warned = true;
-            const strikeCount = addStrike(id, name, "OC delay (20+ mins after ready)");
-            console.log(`[OC] ${name} delay strike issued. Total strikes: ${strikeCount}`);
-
+            const strikeCount = addStrike(id, name, `OC delay — ${ocName} ready for ${formatDuration(readyDuration)} without executing`);
+            console.log(`[OC] Delay strike for ${name}. Total strikes: ${strikeCount}`);
             const embed = new EmbedBuilder()
               .setTitle("⏰ OC DELAY STRIKE")
-              .setDescription(`<@&${config.roleId || ""}> **${name}** has been in a ready OC for **${formatDuration(readyDuration)}** and still hasn't executed it!`)
+              .setDescription(`**${name}** has been in a ready OC for **${formatDuration(readyDuration)}** and hasn't executed it!`)
               .addFields(
                 { name: "OC", value: ocName || "Unknown", inline: true },
                 { name: "Total Strikes", value: `${strikeCount}`, inline: true },
@@ -537,31 +551,28 @@ async function checkOrganisedCrime() {
               .setColor(0xFF6B6B)
               .setFooter({ text: `Strike expires in ${STRIKE_EXPIRY_DAYS} days` })
               .setTimestamp();
-
             await sendToChannel(delayWarningChannelId || ocAlertChannelId, { embeds: [embed] });
           }
         } else {
-          // OC no longer in ready state (was executed or reset)
+          // OC executed or reset
           if (state.oc_ready_since) {
-            console.log(`[OC] ${name}'s OC ready state cleared.`);
+            console.log(`[OC] ${name}'s OC ready state cleared`);
             state.oc_ready_since = null;
             state.delay_warned = false;
           }
         }
       }
 
-      // ── Branch: member NOT in an OC ─────────────────────────────────────
+      // ── Branch: member NOT in an OC ───────────────────────────────────────
       else {
-        // Clear OC ready timer if they left
         state.oc_ready_since = null;
         state.delay_warned = false;
 
-        // Start "not in OC" timer
         if (!state.not_in_oc_since) {
           state.not_in_oc_since = now;
           state.warned_12h = false;
           state.struck_48h = false;
-          console.log(`[OC] ${name} is not in any OC — timer started`);
+          console.log(`[OC] ${name} has no OC — timer started`);
         }
 
         const timeOutMs = now - state.not_in_oc_since;
@@ -569,8 +580,7 @@ async function checkOrganisedCrime() {
         // 12h warning
         if (timeOutMs >= OC_WARN_12H && !state.warned_12h) {
           state.warned_12h = true;
-          console.log(`[OC] 12h warning for ${name}`);
-
+          console.log(`[OC] 12h warning for ${name} (${formatDuration(timeOutMs)} without OC)`);
           const embed = new EmbedBuilder()
             .setTitle("⚠️ OC WARNING — 12 Hours Out")
             .setDescription(`**${name}** has not been in an Organised Crime for **${formatDuration(timeOutMs)}**. Get them into one!`)
@@ -580,16 +590,14 @@ async function checkOrganisedCrime() {
             )
             .setColor(0xFEE75C)
             .setTimestamp();
-
           await sendToChannel(ocAlertChannelId, { embeds: [embed] });
         }
 
         // 48h strike
         if (timeOutMs >= OC_STRIKE_48H && !state.struck_48h) {
           state.struck_48h = true;
-          const strikeCount = addStrike(id, name, "48h without OC");
+          const strikeCount = addStrike(id, name, `48h without OC (${formatDuration(timeOutMs)})`);
           console.log(`[OC] 48h strike for ${name}. Total: ${strikeCount}`);
-
           const embed = new EmbedBuilder()
             .setTitle("🚨 OC STRIKE — 48 Hours Out")
             .setDescription(`**${name}** has not been in an Organised Crime for **${formatDuration(timeOutMs)}**. A strike has been issued.`)
@@ -601,7 +609,6 @@ async function checkOrganisedCrime() {
             .setColor(0xFF0000)
             .setFooter({ text: `Strike expires in ${STRIKE_EXPIRY_DAYS} days` })
             .setTimestamp();
-
           await sendToChannel(ocAlertChannelId, { embeds: [embed] });
         }
       }
@@ -937,7 +944,7 @@ client.on("interactionCreate", async (interaction) => {
     if (!interaction.member.permissions.has("Administrator"))
       return interaction.reply({ content: "❌ need admin perms", ephemeral: true });
     const playerName = interaction.options.getString("name");
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ ephemeral: false });
     try {
       const res = await fetch(`https://api.torn.com/v2/faction/${FACTION_ID}?selections=members&key=${TORN_API_KEY}`);
       const data = await res.json();
