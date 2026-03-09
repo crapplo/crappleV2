@@ -466,25 +466,28 @@ async function checkOrganisedCrime() {
 
     for (const crime of crimes) {
       const crimeStatus = (crime.status || "").toLowerCase();
-      // statuses: "planning", "ready" (all slots filled, can execute), "in_progress"
+      // API status values (case-insensitive): "recruiting", "planning", "ready"
+      // "recruiting" = slots not all filled yet, "planning" = all filled and training
+      // "ready" = ready_at has passed, can now be executed
       const isReady = crimeStatus === "ready";
-      const slots = crime.slots || crime.participants || [];
+      const slots = crime.slots || [];
 
       for (const slot of slots) {
-        // slot shape varies — try multiple field names
-        const uid = String(slot.user_id || slot.player_id || slot.id || "");
+        // Real API shape: slot.user is an object with slot.user.id, or null if empty
+        if (!slot.user) continue; // empty slot, nobody assigned
+        const uid = String(slot.user.id || "");
         if (!uid || uid === "0") continue;
         inOcSet.add(uid);
         if (isReady) {
           readyOcByMember[uid] = {
             ocId: crime.id,
-            ocName: crime.name || crime.crime_name || "Unknown OC"
+            ocName: crime.name || "Unknown OC"
           };
         }
       }
     }
 
-    console.log(`[OC CHECK] ${inOcSet.size} member(s) currently in an OC`);
+    console.log(`[OC CHECK] ${inOcSet.size} member(s) in an OC: ${[...inOcSet].join(", ")}`);
 
     // ── 4. Process each member ───────────────────────────────────────────────
     const now = Date.now();
@@ -944,7 +947,7 @@ client.on("interactionCreate", async (interaction) => {
     if (!interaction.member.permissions.has("Administrator"))
       return interaction.reply({ content: "❌ need admin perms", ephemeral: true });
     const playerName = interaction.options.getString("name");
-    await interaction.deferReply({ ephemeral: false });
+    await interaction.deferReply({ ephemeral: true });
     try {
       const res = await fetch(`https://api.torn.com/v2/faction/${FACTION_ID}?selections=members&key=${TORN_API_KEY}`);
       const data = await res.json();
