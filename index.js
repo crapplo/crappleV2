@@ -85,10 +85,36 @@ let xpData = fs.existsSync(XP_FILE)
   ? JSON.parse(fs.readFileSync(XP_FILE, "utf8"))
   : {};
 
-// OC state: { [player_id]: { name, not_in_oc_since, warned_12h, oc_ready_since, delay_warned, discord_id } }
-let ocState = fs.existsSync(OC_STATE_FILE)
-  ? JSON.parse(fs.readFileSync(OC_STATE_FILE, "utf8"))
-  : {};
+// OC state: { [player_id]: { name, not_in_oc_since, warned_12h, struck_48h, oc_ready_since, delay_warned, first_seen } }
+// OC thresholds
+const OC_WARN_12H = 12 * 60 * 60 * 1000;   // 12 hours in ms
+const OC_STRIKE_48H = 48 * 60 * 60 * 1000; // 48 hours in ms
+const OC_DELAY_WARN = 20 * 60 * 1000;       // 20 minutes in ms
+const STRIKE_EXPIRY_DAYS = 30;
+
+function loadOcState() {
+  if (!fs.existsSync(OC_STATE_FILE)) return {};
+  try {
+    const raw = JSON.parse(fs.readFileSync(OC_STATE_FILE, "utf8"));
+    const now = Date.now();
+    // On load, recalculate warned_12h / struck_48h from how long they have
+    // actually been without OC — prevents re-alerting after a bot restart.
+    for (const [id, s] of Object.entries(raw)) {
+      if (s.not_in_oc_since) {
+        const elapsed = now - s.not_in_oc_since;
+        if (elapsed >= OC_STRIKE_48H) { s.warned_12h = true; s.struck_48h = true; }
+        else if (elapsed >= OC_WARN_12H) { s.warned_12h = true; }
+      }
+      // Clear first_seen so loaded entries are treated as known, not brand-new
+      delete s.first_seen;
+    }
+    return raw;
+  } catch (e) {
+    console.error("Failed to load oc_state.json:", e);
+    return {};
+  }
+}
+let ocState = loadOcState();
 
 const xpCooldowns = new Map();
 const messageCounters = new Map();
@@ -104,11 +130,6 @@ const CROSS_CHANNEL_SPAM_THRESHOLD = 15;
 const CROSS_CHANNEL_SPAM_WINDOW = 10000;
 const CROSS_CHANNEL_TIMEOUT_DURATION = 12 * 60 * 60;
 
-// OC thresholds
-const OC_WARN_12H = 12 * 60 * 60 * 1000;   // 12 hours in ms
-const OC_STRIKE_48H = 48 * 60 * 60 * 1000; // 48 hours in ms
-const OC_DELAY_WARN = 20 * 60 * 1000;       // 20 minutes in ms
-const STRIKE_EXPIRY_DAYS = 30;
 
 // ─── SAVE HELPERS ─────────────────────────────────────────────────────────────
 
@@ -436,7 +457,7 @@ async function checkOrganisedCrime() {
       const name = m.name || ocState[id]?.name || "Unknown";
       const { inOc, isReady, ocName } = getOcInfo(m);
 
-      // Initialise state entry if missing
+      // Initialise state entry if missing — NEVER alert on first cycle
       if (!ocState[id]) {
         ocState[id] = {
           name,
@@ -445,8 +466,14 @@ async function checkOrganisedCrime() {
           struck_48h: false,
           oc_ready_since: null,
           delay_warned: false,
-          last_seen: now
+          last_seen: now,
+          // first_seen flag: entry was just created this run.
+          // We skip all alert logic for this cycle so the bot does not
+          // spam warnings/strikes for everyone on startup or first run.
+          first_seen: now
         };
+        console.log('[OC] First time seeing ' + name + ' (' + id + ') — recording silently, no alerts this cycle');
+        continue; // skip alert logic for brand-new entries
       } else {
         ocState[id].name = name;
         ocState[id].last_seen = now;
