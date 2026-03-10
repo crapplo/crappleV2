@@ -11,6 +11,7 @@ This repository contains a bot that provides:
 - **Event announcements**: Create events with RSVP tracking and automatic reminders
 - **XP system**: Message-based XP gain with levels, leaderboards, and profiles
 - **Chain watch reminders**: Scheduled reminders for chain watching duties
+- **OC monitoring**: Shows anyone who isn't in an OC and for how longs
 
 ---
 

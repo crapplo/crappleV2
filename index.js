@@ -619,6 +619,23 @@ async function checkOrganisedCrime() {
 
     saveOcState();
     saveNotOcCsv();
+
+    // Send daily Not-in-OC report at noon UTC if channel is set
+    const currentDate = new Date(now);
+    const today = currentDate.toDateString();
+    const hour = currentDate.getUTCHours();
+    if (hour === 12 && config.lastDailySent !== today && config.notOcChannelId) {
+      try {
+        const report = buildNotInOcReportText(1900);
+        await sendToChannel(config.notOcChannelId, { content: report });
+        config.lastDailySent = today;
+        saveConfig();
+        console.log("[OC CHECK] Daily Not-in-OC report sent at noon UTC.");
+      } catch (err) {
+        console.error("[OC CHECK] Failed to send daily report:", err);
+      }
+    }
+
     console.log("[OC CHECK] Done.");
   } catch (err) {
     console.error("[OC CHECK] Error:", err);
