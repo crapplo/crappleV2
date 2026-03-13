@@ -45,6 +45,7 @@ const OC_STATE_FILE = "./oc_state.json";
 const DATA_DIR = "./data";
 const CHAINS_FILE = `${DATA_DIR}/chains.json`;
 const MONTHLY_HITS_FILE = `${DATA_DIR}/monthly_hits.json`;
+const MONTHLY_REPORTS_FILE = `${DATA_DIR}/monthly_reports.json`;
 
 // Ensure ./data directory exists
 if (!fs.existsSync(DATA_DIR)) {
@@ -114,6 +115,10 @@ let chainsData = fs.existsSync(CHAINS_FILE)
 // ─── FEATURE 2: LOAD MONTHLY HITS DATA ───────────────────────────────────────
 let monthlyHitsData = fs.existsSync(MONTHLY_HITS_FILE)
   ? JSON.parse(fs.readFileSync(MONTHLY_HITS_FILE, "utf8"))
+  : {};
+// ─── MONTHLY REPORTS: LOAD PERSISTED REPORT DATA ─────────────────────────────
+let monthlyReportsData = fs.existsSync(MONTHLY_REPORTS_FILE)
+  ? JSON.parse(fs.readFileSync(MONTHLY_REPORTS_FILE, "utf8"))
   : {};
 
 // OC state: { [player_id]: { name, not_in_oc_since, warned_12h, struck_48h, oc_ready_since, delay_warned, first_seen } }
@@ -206,6 +211,12 @@ function saveChainsData() {
 function saveMonthlyHitsData() {
   try { fs.writeFileSync(MONTHLY_HITS_FILE, JSON.stringify(monthlyHitsData, null, 2)); }
   catch (e) { console.error("[CHAIN] Couldn't save monthly_hits.json:", e); }
+}
+
+// ─── MONTHLY REPORTS: SAVE ───────────────────────────────────────────────────
+function saveMonthlyReportsData() {
+  try { fs.writeFileSync(MONTHLY_REPORTS_FILE, JSON.stringify(monthlyReportsData, null, 2)); }
+  catch (e) { console.error("[REPORT] Couldn't save monthly_reports.json:", e); }
 }
 
 
@@ -772,6 +783,217 @@ function getPlayerChainStats(tornPlayerId) {
 }
 
 
+// ─── MONTHLY FACTION REPORT: AGGREGATION ────────────────────────────────────
+// Aggregates all chains stored in chainsData for a given month (YYYY-MM).
+// Returns { chainsCompleted, totalHits, totalRespect, memberHits }
+function aggregateChainDataForMonth(monthKey) {
+  let chainsCompleted = 0;
+  let totalHits = 0;
+  let totalRespect = 0;
+  const memberHits = {}; // { tornId: totalHits }
+
+  for (const [chainLengthKey, record] of Object.entries(chainsData)) {
+    // Determine which month this chain belongs to via its timestamp
+    if (!record.timestamp) continue;
+    const chainMonth = getMonthKey(new Date(record.timestamp * 1000));
+    if (chainMonth !== monthKey) continue;
+
+    chainsCompleted++;
+    totalRespect += record.respect || 0;
+    totalHits += record.chain || Number(chainLengthKey) || 0;
+
+    // Accumulate per-member hits
+    for (const [uid, hits] of Object.entries(record.members || {})) {
+      memberHits[uid] = (memberHits[uid] || 0) + hits;
+    }
+  }
+
+  return { chainsCompleted, totalHits, totalRespect, memberHits };
+}
+
+// ─── MONTHLY FACTION REPORT: FETCH TRAINING STATS ────────────────────────────
+// Fetches faction contributor stats for all four gym stats from Torn API.
+// Returns { [tornId]: { name, totalTraining, estimatedEnergy } }
+// Torn API: GET /faction/?selections=contributors&stat=gymX
+// Each stat entry: { contributors: { [id]: { name, value } } }
+async function fetchTrainingStats() {
+  const GYM_STATS = ["gymstrength", "gymdefense", "gymspeed", "gymdexterity"];
+  const ENERGY_PER_TRAIN = 5; // 1 gym train costs 5 energy (Torn standard)
+  const memberTraining = {}; // { tornId: { name, totalTraining } }
+
+  for (const stat of GYM_STATS) {
+    try {
+      const url = `https://api.torn.com/faction/${FACTION_ID}?selections=contributors&stat=${stat}&key=${TORN_API_KEY}`;
+      const res = await fetch(url);
+      if (!res.ok) { console.warn(`[REPORT] Training fetch HTTP error for ${stat}: ${res.status}`); continue; }
+      const data = await res.json();
+      if (data.error) { console.warn(`[REPORT] Training API error for ${stat}:`, data.error); continue; }
+
+      // Response shape: { contributors: { [id]: { name, value, contributed, in_faction } } }
+      // "contributed" is the amount added to faction total — closest proxy for monthly activity.
+      // "value" is the member's current personal stat total.
+      // We use "contributed" as the training delta for this billing cycle.
+      const contributors = data.contributors?.contributors || data.contributors || {};
+
+      for (const [id, memberData] of Object.entries(contributors)) {
+        const uid = String(id);
+        const contributed = memberData.contributed || memberData.value || 0;
+        if (!memberTraining[uid]) {
+          memberTraining[uid] = { name: memberData.name || `Player ${uid}`, totalTraining: 0 };
+        }
+        memberTraining[uid].totalTraining += contributed;
+      }
+
+      // Rate-limit courtesy pause between stat fetches (Torn API: ~100 req/min)
+      await new Promise(r => setTimeout(r, 700));
+    } catch (err) {
+      console.error(`[REPORT] Error fetching ${stat} training data:`, err.message);
+    }
+  }
+
+  // Convert raw training total → estimated energy spent
+  // Formula: each "contributed" unit represents roughly 1 stat point gained.
+  // Torn average: ~1 stat gained per 5 energy on gym.
+  const result = {};
+  for (const [uid, data] of Object.entries(memberTraining)) {
+    result[uid] = {
+      name: data.name,
+      totalTraining: data.totalTraining,
+      estimatedEnergy: Math.round(data.totalTraining * ENERGY_PER_TRAIN)
+    };
+  }
+  return result;
+}
+
+// ─── MONTHLY FACTION REPORT: BUILD AND POST ──────────────────────────────────
+// Generates the full monthly report embed(s) and sends them to the configured channel.
+// monthKey: "YYYY-MM" — defaults to current month.
+async function buildAndPostMonthlyReport(monthKey = null) {
+  const LOW_ENERGY_THRESHOLD = 7000; // energy below this triggers low-training warning
+  const targetMonth = monthKey || getMonthKey();
+  const channelId = config.chainChannelId;
+
+  console.log(`[REPORT] Building monthly report for ${targetMonth}...`);
+
+  // ── 1. Aggregate chain data ──────────────────────────────────────────────
+  const chainAgg = aggregateChainDataForMonth(targetMonth);
+
+  // ── 2. Fetch training stats ──────────────────────────────────────────────
+  let trainingStats = {};
+  try {
+    trainingStats = await fetchTrainingStats();
+  } catch (err) {
+    console.error("[REPORT] Failed to fetch training stats:", err.message);
+  }
+
+  // ── 3. Resolve names for top chain hitters ───────────────────────────────
+  const sortedHitters = Object.entries(chainAgg.memberHits)
+    .filter(([, hits]) => hits > 0)
+    .sort((a, b) => b[1] - a[1]);
+
+  const allIds = [...new Set([
+    ...sortedHitters.map(([id]) => id),
+    ...Object.keys(trainingStats)
+  ])];
+  const nameMap = await resolveTornPlayerNames(allIds);
+
+  // Merge names into trainingStats (API names take priority, fall back to contributor name)
+  for (const [uid, data] of Object.entries(trainingStats)) {
+    if (nameMap.has(uid)) data.name = nameMap.get(uid);
+  }
+
+  // ── 4. Identify low trainers ─────────────────────────────────────────────
+  const lowTrainers = Object.entries(trainingStats)
+    .filter(([, d]) => d.estimatedEnergy < LOW_ENERGY_THRESHOLD)
+    .sort((a, b) => a[1].estimatedEnergy - b[1].estimatedEnergy);
+
+  // ── 5. Persist report data ───────────────────────────────────────────────
+  monthlyReportsData[targetMonth] = {
+    chainsCompleted: chainAgg.chainsCompleted,
+    totalHits: chainAgg.totalHits,
+    totalRespect: Math.round(chainAgg.totalRespect * 100) / 100,
+    memberHits: chainAgg.memberHits,
+    generatedAt: Math.floor(Date.now() / 1000)
+  };
+  saveMonthlyReportsData();
+  console.log(`[REPORT] Saved report data for ${targetMonth}`);
+
+  // ── 6. Build embed(s) ────────────────────────────────────────────────────
+  // Top 5 hitters section
+  const MEDALS = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"];
+  const topHittersText = sortedHitters.slice(0, 5).length > 0
+    ? sortedHitters.slice(0, 5).map(([id, hits], i) => {
+        const name = nameMap.get(id) || `Player ${id}`;
+        return `${MEDALS[i]} [${name}](${playerProfileLink(id)}) — **${hits.toLocaleString()}** hits`;
+      }).join("\n")
+    : "No chain data recorded this month.";
+
+  // Low trainers section
+  const lowTrainersText = lowTrainers.length > 0
+    ? lowTrainers.slice(0, 15).map(([id, d]) => {
+        const name = d.name || nameMap.get(id) || `Player ${id}`;
+        return `• [${name}](${playerProfileLink(id)}) — ${d.estimatedEnergy.toLocaleString()} energy`;
+      }).join("\n") +
+      (lowTrainers.length > 15 ? `\n*...and ${lowTrainers.length - 15} more*` : "")
+    : "✅ All members above training threshold!";
+
+  // Main summary embed
+  const summaryEmbed = new EmbedBuilder()
+    .setTitle(`📊 Monthly Faction Report — ${targetMonth}`)
+    .setColor(0x5865F2)
+    .addFields(
+      {
+        name: "⛓️ Chain Summary",
+        value: [
+          `**Chains Completed:** ${chainAgg.chainsCompleted.toLocaleString()}`,
+          `**Total Chain Hits:** ${chainAgg.totalHits.toLocaleString()}`,
+          `**Total Respect Earned:** ${chainAgg.totalRespect.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+        ].join("\n"),
+        inline: false
+      },
+      {
+        name: "🏆 Top Chain Hitters",
+        value: topHittersText,
+        inline: false
+      },
+      {
+        name: `⚠️ Low Training (<${LOW_ENERGY_THRESHOLD.toLocaleString()} energy)`,
+        value: lowTrainersText,
+        inline: false
+      }
+    )
+    .setFooter({ text: `Report generated for ${targetMonth}` })
+    .setTimestamp();
+
+  // ── 7. Send to channel ───────────────────────────────────────────────────
+  if (channelId) {
+    await sendToChannel(channelId, { embeds: [summaryEmbed] });
+    console.log(`[REPORT] Monthly report posted to channel ${channelId}`);
+  } else {
+    console.warn("[REPORT] No chainChannelId configured — report not posted. Use /setchainchannel.");
+  }
+
+  return summaryEmbed;
+}
+
+// ─── MONTHLY REPORT: AUTO-TRIGGER ON MONTH END ───────────────────────────────
+// Called from inside the OC poll. Fires once on the last day of the month at 23:00 UTC.
+async function checkMonthlyReportTrigger() {
+  const now = new Date();
+  const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+  const isLastDayOfMonth = tomorrow.getUTCDate() === 1; // tomorrow is 1st → today is last day
+  const hour = now.getUTCHours();
+  const today = now.toDateString();
+
+  if (isLastDayOfMonth && hour === 23 && config.lastMonthlyReportSent !== today && config.chainChannelId) {
+    config.lastMonthlyReportSent = today;
+    saveConfig();
+    const monthKey = getMonthKey(now);
+    console.log(`[REPORT] Auto-triggering monthly report for ${monthKey}`);
+    await buildAndPostMonthlyReport(monthKey);
+  }
+}
+
 // ─── OC CHECK (runs every 10 mins) ───────────────────────────────────────────
 
 async function checkOrganisedCrime() {
@@ -1007,6 +1229,9 @@ async function checkOrganisedCrime() {
 
     // ── Feature 4: Check if monthly leaderboard should fire ───────────────
     await checkMonthlyLeaderboardTrigger();
+
+    // ── Monthly faction report: auto-trigger on last day of month at 23:00 UTC ─
+    await checkMonthlyReportTrigger();
 
     console.log("[OC CHECK] Done.");
   } catch (err) {
@@ -1368,7 +1593,7 @@ client.on("interactionCreate", async (interaction) => {
       .setDescription(jailed || "Nobody's in the chambers rn! Everyone's being good :)")
       .setColor(jailed ? 0xFF6B6B : 0x57F287)
       .setTimestamp();
-    await interaction.reply({ embeds: [embed], ephemeral: true });
+    await interaction.reply({ embeds: [embed] });
   }
 
   // ── /rolereact ─────────────────────────────────────────────────────────────
@@ -1491,12 +1716,12 @@ client.on("interactionCreate", async (interaction) => {
   // ── /getnotoc ──────────────────────────────────────────────────────────────
   if (interaction.commandName === "getnotoc") {
     const id = config.notOcChannelId || "(not set)";
-    await interaction.reply({ content: `Configured Not-in-OC channel id: \`${id}\``, ephemeral: true });
+    await interaction.reply({ content: `Configured Not-in-OC channel id: \`${id}\`` });
   }
 
   // ── /notinoc ───────────────────────────────────────────────────────────────
   if (interaction.commandName === "notinoc") {
-    await interaction.deferReply({ ephemeral: true }).catch(() => {});
+    await interaction.deferReply().catch(() => {});
     try {
       const report = buildNotInOcReportText(1900);
       await interaction.editReply({ content: report });
@@ -1515,7 +1740,7 @@ client.on("interactionCreate", async (interaction) => {
     if (targetName) {
       const playerStrikes = all.filter(s => s.name.toLowerCase().includes(targetName.toLowerCase()));
       if (playerStrikes.length === 0) {
-        return interaction.reply({ content: `✅ No active strikes found for **${targetName}**`, ephemeral: true });
+        return interaction.reply({ content: `✅ No active strikes found for **${targetName}**` });
       }
       const lines = playerStrikes.map((s, i) => {
         const expiresIn = formatDuration(s.expires_at - now);
@@ -1527,7 +1752,7 @@ client.on("interactionCreate", async (interaction) => {
         .setColor(0xFF6B6B)
         .setFooter({ text: `${playerStrikes.length} active strike(s) — expire after ${STRIKE_EXPIRY_DAYS} days` })
         .setTimestamp();
-      await interaction.reply({ embeds: [embed], ephemeral: true });
+      await interaction.reply({ embeds: [embed] });
     } else {
       const grouped = {};
       for (const s of all) {
@@ -1535,7 +1760,7 @@ client.on("interactionCreate", async (interaction) => {
         grouped[s.player_id].count++;
       }
       if (Object.keys(grouped).length === 0) {
-        return interaction.reply({ content: "✅ No active strikes! Everyone's behaving.", ephemeral: true });
+        return interaction.reply({ content: "✅ No active strikes! Everyone's behaving." });
       }
       const sortedEntries = Object.entries(grouped).sort((a, b) => b[1].count - a[1].count);
       const lines = sortedEntries.map(([id, { name, count }]) =>
@@ -1547,7 +1772,7 @@ client.on("interactionCreate", async (interaction) => {
         .setColor(0xFEE75C)
         .setFooter({ text: `Strikes expire ${STRIKE_EXPIRY_DAYS} days after issue` })
         .setTimestamp();
-      await interaction.reply({ embeds: [embed], ephemeral: true });
+      await interaction.reply({ embeds: [embed] });
     }
   }
 
@@ -1594,7 +1819,7 @@ client.on("interactionCreate", async (interaction) => {
         { name: "Messages", value: `${data.messages}`, inline: true }
       )
       .setColor(0x5865F2).setTimestamp();
-    await interaction.reply({ embeds: [embed], ephemeral: true });
+    await interaction.reply({ embeds: [embed] });
   }
 
   // ── /leaderboard ───────────────────────────────────────────────────────────
@@ -1602,7 +1827,7 @@ client.on("interactionCreate", async (interaction) => {
     const top = Object.entries(xpData).sort((a, b) => (b[1].xp || 0) - (a[1].xp || 0)).slice(0, 10);
     const desc = top.map(([id, d], i) => `${i + 1}. <@${id}> — Level ${xpToLevel(d.xp || 0)} (${d.xp || 0} XP)`).join("\n") || "No data yet.";
     const embed = new EmbedBuilder().setTitle("🏆 XP Leaderboard").setDescription(desc).setColor(0xFFD700).setTimestamp();
-    await interaction.reply({ embeds: [embed], ephemeral: true });
+    await interaction.reply({ embeds: [embed] });
   }
 
   // ── /event ─────────────────────────────────────────────────────────────────
@@ -1677,7 +1902,7 @@ client.on("interactionCreate", async (interaction) => {
 
   // ── /monthlyleaderboard — FEATURE 4 ───────────────────────────────────────
   if (interaction.commandName === "monthlyleaderboard") {
-    await interaction.deferReply({ ephemeral: false }).catch(() => {});
+    await interaction.deferReply().catch(() => {});
     try {
       const monthArg = interaction.options.getString("month"); // optional YYYY-MM
       const embed = await getMonthlyLeaderboardEmbed(monthArg || null);
@@ -1690,7 +1915,7 @@ client.on("interactionCreate", async (interaction) => {
 
   // ── /chainstats — FEATURE 5 ────────────────────────────────────────────────
   if (interaction.commandName === "chainstats") {
-    await interaction.deferReply({ ephemeral: false }).catch(() => {});
+    await interaction.deferReply().catch(() => {});
     try {
       const discordUser = interaction.options.getUser("user") || interaction.user;
       const tornIdArg = interaction.options.getString("tornid"); // optional manual Torn ID
@@ -1768,6 +1993,36 @@ client.on("interactionCreate", async (interaction) => {
       }
     } catch (err) {
       await interaction.editReply(`❌ Error: ${err.message}`);
+    }
+  }
+
+  // ── /monthlyreport — generate and post the monthly faction report ─────────
+  if (interaction.commandName === "monthlyreport") {
+    // Defer publicly so everyone sees it being generated
+    await interaction.deferReply({ ephemeral: false }).catch(() => {});
+    try {
+      const monthArg = interaction.options.getString("month"); // optional YYYY-MM
+      const targetMonth = monthArg || getMonthKey();
+
+      // Validate month format if provided
+      if (monthArg && !/^\d{4}-\d{2}$/.test(monthArg)) {
+        await interaction.editReply("❌ Invalid month format. Use `YYYY-MM` (e.g. `2026-03`).");
+        return;
+      }
+
+      await interaction.editReply(`⏳ Generating monthly report for **${targetMonth}**... (fetching training data, this may take a few seconds)`);
+
+      const embed = await buildAndPostMonthlyReport(targetMonth);
+
+      // If no channel is configured, reply directly to the interaction instead
+      if (!config.chainChannelId) {
+        await interaction.followUp({ embeds: [embed] });
+      } else {
+        await interaction.editReply(`✅ Monthly report for **${targetMonth}** posted to <#${config.chainChannelId}>.`);
+      }
+    } catch (err) {
+      console.error("[REPORT] /monthlyreport error:", err);
+      await interaction.editReply("❌ Failed to generate report — check the logs.");
     }
   }
 });
@@ -1873,6 +2128,12 @@ async function registerCommands() {
     new SlashCommandBuilder()
       .setName("fetchchainreport")
       .setDescription("Admin: manually fetch and process the latest chain report"),
+
+    // Monthly faction report: chain stats + training activity
+    new SlashCommandBuilder()
+      .setName("monthlyreport")
+      .setDescription("Generate and post the monthly faction report (chains + training)")
+      .addStringOption(o => o.setName("month").setDescription("Month to report on (YYYY-MM, default: current)").setRequired(false)),
 
   ].map(cmd => cmd.toJSON());
 
