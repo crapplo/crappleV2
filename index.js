@@ -22,6 +22,16 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const POLL_INTERVAL = (parseInt(process.env.POLL_INTERVAL || "60") || 60) * 1000;
 const OC_POLL_INTERVAL = 10 * 60 * 1000; // 10 minutes
 
+// ─── FEATURE 7: CENTRALISED RUNTIME CONFIG ───────────────────────────────────
+// These are loaded from .env but also exposed here for clarity and easy override.
+// chainChannelId and ocChannelId are loaded from the persisted config.json at
+// startup (set via /setchainchannel and /setocalert slash commands).
+const runtimeConfig = {
+  tornApiKey: TORN_API_KEY,
+  factionId: FACTION_ID,
+  // chainChannelId and ocChannelId are read from config.json at runtime
+};
+
 // File paths for persistence
 const CONFIG_FILE = "./config.json";
 const STATE_FILE = "./jailstate.json";
@@ -30,6 +40,17 @@ const XP_FILE = "./xp.json";
 const NOT_OC_CSV = "./not_oc.csv";
 const STRIKES_CSV = "./strikes.csv";
 const OC_STATE_FILE = "./oc_state.json";
+
+// ─── FEATURE 1 & 2: NEW DATA FILE PATHS ──────────────────────────────────────
+const DATA_DIR = "./data";
+const CHAINS_FILE = `${DATA_DIR}/chains.json`;
+const MONTHLY_HITS_FILE = `${DATA_DIR}/monthly_hits.json`;
+
+// Ensure ./data directory exists
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  console.log("[CHAIN] Created ./data directory");
+}
 
 // Validate required environment variables
 if (!DISCORD_TOKEN) {
@@ -85,6 +106,16 @@ let xpData = fs.existsSync(XP_FILE)
   ? JSON.parse(fs.readFileSync(XP_FILE, "utf8"))
   : {};
 
+// ─── FEATURE 1: LOAD CHAIN DATA ──────────────────────────────────────────────
+let chainsData = fs.existsSync(CHAINS_FILE)
+  ? JSON.parse(fs.readFileSync(CHAINS_FILE, "utf8"))
+  : {};
+
+// ─── FEATURE 2: LOAD MONTHLY HITS DATA ───────────────────────────────────────
+let monthlyHitsData = fs.existsSync(MONTHLY_HITS_FILE)
+  ? JSON.parse(fs.readFileSync(MONTHLY_HITS_FILE, "utf8"))
+  : {};
+
 // OC state: { [player_id]: { name, not_in_oc_since, warned_12h, struck_48h, oc_ready_since, delay_warned, first_seen } }
 // OC thresholds
 const OC_WARN_12H = 12 * 60 * 60 * 1000;   // 12 hours in ms
@@ -92,20 +123,21 @@ const OC_STRIKE_48H = 48 * 60 * 60 * 1000; // 48 hours in ms
 const OC_DELAY_WARN = 20 * 60 * 1000;       // 20 minutes in ms
 const STRIKE_EXPIRY_DAYS = 30;
 
+// ─── FEATURE 6: OC SLOT VACANCY TRACKING ─────────────────────────────────────
+// Tracks which crimes have been warned about open slots to avoid spam
+const ocSlotWarnedCrimes = new Set();
+
 function loadOcState() {
   if (!fs.existsSync(OC_STATE_FILE)) return {};
   try {
     const raw = JSON.parse(fs.readFileSync(OC_STATE_FILE, "utf8"));
     const now = Date.now();
-    // On load, recalculate warned_12h / struck_48h from how long they have
-    // actually been without OC — prevents re-alerting after a bot restart.
     for (const [id, s] of Object.entries(raw)) {
       if (s.not_in_oc_since) {
         const elapsed = now - s.not_in_oc_since;
         if (elapsed >= OC_STRIKE_48H) { s.warned_12h = true; s.struck_48h = true; }
         else if (elapsed >= OC_WARN_12H) { s.warned_12h = true; }
       }
-      // Clear first_seen so loaded entries are treated as known, not brand-new
       delete s.first_seen;
     }
     return raw;
@@ -129,6 +161,12 @@ const SPAM_TIMEOUT_DURATION = 67;
 const CROSS_CHANNEL_SPAM_THRESHOLD = 15;
 const CROSS_CHANNEL_SPAM_WINDOW = 10000;
 const CROSS_CHANNEL_TIMEOUT_DURATION = 12 * 60 * 60;
+
+// ─── CHAIN POLLING STATE ──────────────────────────────────────────────────────
+// Tracks the last known chain length to detect when a chain ends
+let lastChainLength = 0;
+let lastChainActive = false;
+const CHAIN_POLL_INTERVAL = 60 * 1000; // 60 seconds
 
 
 // ─── SAVE HELPERS ─────────────────────────────────────────────────────────────
@@ -158,6 +196,19 @@ function saveOcState() {
   catch (e) { console.error("Couldn't save OC state:", e); }
 }
 
+// ─── FEATURE 1: SAVE CHAIN DATA ──────────────────────────────────────────────
+function saveChainsData() {
+  try { fs.writeFileSync(CHAINS_FILE, JSON.stringify(chainsData, null, 2)); }
+  catch (e) { console.error("[CHAIN] Couldn't save chains.json:", e); }
+}
+
+// ─── FEATURE 2: SAVE MONTHLY HITS DATA ───────────────────────────────────────
+function saveMonthlyHitsData() {
+  try { fs.writeFileSync(MONTHLY_HITS_FILE, JSON.stringify(monthlyHitsData, null, 2)); }
+  catch (e) { console.error("[CHAIN] Couldn't save monthly_hits.json:", e); }
+}
+
+
 // ─── CSV HELPERS ──────────────────────────────────────────────────────────────
 
 function tsToHuman(ms) {
@@ -169,7 +220,6 @@ function saveNotOcCsv() {
   try {
     const rows = [["player_id", "name", "not_in_oc_since_ts", "not_in_oc_since", "last_seen"]];
     for (const [id, rec] of Object.entries(ocState)) {
-      // Skip entries from first check cycle and members currently in OC
       if (rec.not_in_oc_since && !rec.first_seen) {
         rows.push([
           id,
@@ -184,18 +234,16 @@ function saveNotOcCsv() {
   } catch (e) { console.error("Failed to save not_oc CSV:", e); }
 }
 
-// strikes.csv: player_id, name, reason, timestamp, expires_at
 function loadStrikes() {
   try {
     if (!fs.existsSync(STRIKES_CSV)) return [];
     const raw = fs.readFileSync(STRIKES_CSV, "utf8").trim();
     if (!raw) return [];
     const lines = raw.split(/\r?\n/);
-    lines.shift(); // remove header
+    lines.shift();
     return lines
       .filter(Boolean)
       .map(ln => {
-        // handle quoted names with commas
         const match = ln.match(/^([^,]+),"?(.*?)"?,([^,]+),([^,]+),([^,]+)$/);
         if (!match) return null;
         return {
@@ -235,7 +283,6 @@ function addStrike(playerId, name, reason) {
   const strikes = loadStrikes();
   const now = Date.now();
   const expiresAt = now + STRIKE_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
-  // Prune expired strikes first
   const active = strikes.filter(s => s.expires_at > now);
   active.push({ player_id: String(playerId), name, reason, timestamp: now, expires_at: expiresAt });
   saveStrikes(active);
@@ -254,6 +301,7 @@ function getAllActiveStrikes() {
   const now = Date.now();
   return strikes.filter(s => s.expires_at > now);
 }
+
 
 // ─── UTILITY ──────────────────────────────────────────────────────────────────
 
@@ -283,6 +331,57 @@ function formatDuration(ms) {
   if (hours > 0) return `${hours}h ${minutes}m`;
   if (minutes > 0) return `${minutes}m`;
   return `${seconds}s`;
+}
+
+// ─── FEATURE 2 & 4: GET CURRENT MONTH KEY (YYYY-MM) ──────────────────────────
+function getMonthKey(date = new Date()) {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
+// ─── FEATURE 1 & 4: RESOLVE TORN PLAYER NAMES ────────────────────────────────
+// Fetches player names from Torn API for a list of player IDs.
+// Returns a Map of { id -> name }. Gracefully handles missing/errored entries.
+async function resolveTornPlayerNames(playerIds) {
+  const nameMap = new Map();
+  if (!playerIds || playerIds.length === 0) return nameMap;
+
+  // Torn API allows comma-separated IDs for user lookups
+  // We batch in groups of 100 to respect URL length limits
+  const BATCH_SIZE = 100;
+  for (let i = 0; i < playerIds.length; i += BATCH_SIZE) {
+    const batch = playerIds.slice(i, i + BATCH_SIZE);
+    try {
+      // Use the /v2/user endpoint with multiple IDs for efficiency
+      const ids = batch.join(",");
+      const url = `https://api.torn.com/user/${ids}?selections=basic&key=${TORN_API_KEY}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        console.warn(`[CHAIN] Name lookup HTTP error: ${res.status}`);
+        continue;
+      }
+      const data = await res.json();
+      if (data.error) {
+        console.warn(`[CHAIN] Name lookup API error:`, data.error);
+        continue;
+      }
+      // Response is either a single user object or a map of {id: userObj}
+      if (batch.length === 1) {
+        // Single user response
+        const id = String(batch[0]);
+        if (data.name) nameMap.set(id, data.name);
+      } else {
+        // Multi-user response: { "12345": { name: "...", ... }, ... }
+        for (const [id, userData] of Object.entries(data)) {
+          if (userData && userData.name) nameMap.set(String(id), userData.name);
+        }
+      }
+    } catch (err) {
+      console.warn(`[CHAIN] Failed to resolve names for batch:`, err.message);
+    }
+  }
+  return nameMap;
 }
 
 // ─── MEMBER NORMALISATION ────────────────────────────────────────────────────
@@ -334,8 +433,6 @@ const normalizeMembers = (apiData) => {
   return members;
 };
 
-// ─── OC STATUS HELPERS ─────────────────────────────────────────────────────── //
-// getOcInfo removed — OC status now fetched via /v2/faction/crimes endpoint
 
 // ─── SEND HELPER ─────────────────────────────────────────────────────────────
 
@@ -350,7 +447,8 @@ async function sendToChannel(channelId, payload) {
   }
 }
 
-// ─── LEGACY not_oc CSV LOADER (preserves data from previous bot runs) ────────
+
+// ─── LEGACY not_oc CSV LOADER ────────────────────────────────────────────────
 
 function loadNotOcCsvLegacy() {
   try {
@@ -358,15 +456,13 @@ function loadNotOcCsvLegacy() {
     const raw = fs.readFileSync(NOT_OC_CSV, "utf8").trim();
     if (!raw) return;
     const lines = raw.split(/\r?\n/);
-    lines.shift(); // skip header
+    lines.shift();
     let loaded = 0;
     for (const ln of lines) {
       if (!ln) continue;
-      // CSV: player_id,name,last_not_in_oc,lastSeen  (name may be quoted)
       const parts = ln.split(",").map(s => s.replace(/^"|"$/g, ""));
       const [player_id, name, last_not_in_oc, lastSeen] = parts;
       if (!player_id) continue;
-      // Only seed into ocState if there's no existing entry
       if (!ocState[String(player_id)]) {
         ocState[String(player_id)] = {
           name: name || "Unknown",
@@ -386,7 +482,6 @@ function loadNotOcCsvLegacy() {
   }
 }
 
-// Build a plain-text report of players not in OC (used by /notinoc)
 function buildNotInOcReportText(maxChars) {
   const now = Date.now();
   const entries = Object.entries(ocState).filter(([_, data]) => data.not_in_oc_since !== null && data.not_in_oc_since !== undefined);
@@ -395,7 +490,6 @@ function buildNotInOcReportText(maxChars) {
     return "📊 **Not-in-OC Report**\n\nEveryone's in OC! 🎉";
   }
 
-  // Sort by duration (longest not in OC first)
   entries.sort((a, b) => (a[1].not_in_oc_since || now) - (b[1].not_in_oc_since || now));
 
   let report = "📊 **Not-in-OC Report**\n\n";
@@ -422,12 +516,263 @@ function buildNotInOcReportText(maxChars) {
   return report;
 }
 
+
+// ─── FEATURE 1: FETCH AND PROCESS CHAIN REPORT ───────────────────────────────
+// Fetches the latest chain report from Torn API and saves it to chains.json.
+// Also triggers monthly hit accumulation (Feature 2) and Discord post (Feature 3).
+async function fetchAndProcessChainReport(chainLength) {
+  console.log(`[CHAIN] Fetching chain report for chain length ~${chainLength}...`);
+  try {
+    // Torn API v2 chain report endpoint
+    const url = `https://api.torn.com/v2/faction/${FACTION_ID}?selections=chainreport&key=${TORN_API_KEY}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.error(`[CHAIN] Chain report HTTP error: ${res.status}`);
+      return null;
+    }
+    const data = await res.json();
+    if (data.error) {
+      console.error("[CHAIN] Chain report API error:", data.error);
+      return null;
+    }
+
+    // Navigate to chainreport — handle both v1 and v2 response shapes
+    const report = data.chainreport || data.faction?.chainreport || data;
+    if (!report || !report.chain) {
+      console.warn("[CHAIN] Chain report response missing expected structure:", JSON.stringify(data).substring(0, 200));
+      return null;
+    }
+
+    const actualChainLength = report.chain;
+    const respect = report.respect || 0;
+    const timestamp = Math.floor(Date.now() / 1000);
+
+    // Build normalised member hit map: { "playerId": attackCount }
+    const memberHits = {};
+    const rawMembers = report.members || {};
+    for (const [userId, memberData] of Object.entries(rawMembers)) {
+      const attacks = memberData.attacks || memberData.hits || 0;
+      memberHits[String(userId)] = attacks;
+    }
+
+    // ── Feature 1: Persist to chains.json ─────────────────────────────────
+    const chainKey = String(actualChainLength);
+    chainsData[chainKey] = {
+      timestamp,
+      respect,
+      members: memberHits
+    };
+    saveChainsData();
+    console.log(`[CHAIN] Saved chain ${chainKey} with ${Object.keys(memberHits).length} members to chains.json`);
+
+    // ── Feature 2: Accumulate monthly hits ────────────────────────────────
+    accumulateMonthlyHits(memberHits);
+
+    // ── Feature 3: Post results to Discord ────────────────────────────────
+    await postChainResultsEmbed(actualChainLength, respect, memberHits, timestamp);
+
+    return { chainLength: actualChainLength, respect, memberHits };
+  } catch (err) {
+    console.error("[CHAIN] Error fetching chain report:", err);
+    return null;
+  }
+}
+
+// ─── FEATURE 2: ACCUMULATE MONTHLY HITS ──────────────────────────────────────
+// Adds each member's attack count from a chain to their running monthly total.
+function accumulateMonthlyHits(memberHits) {
+  const monthKey = getMonthKey();
+
+  // Create month entry if it doesn't exist yet
+  if (!monthlyHitsData[monthKey]) {
+    monthlyHitsData[monthKey] = {};
+    console.log(`[CHAIN] Created new monthly entry for ${monthKey}`);
+  }
+
+  for (const [userId, hits] of Object.entries(memberHits)) {
+    const prev = monthlyHitsData[monthKey][userId] || 0;
+    monthlyHitsData[monthKey][userId] = prev + hits;
+  }
+
+  saveMonthlyHitsData();
+  console.log(`[CHAIN] Updated monthly hits for ${monthKey} — ${Object.keys(memberHits).length} members updated`);
+}
+
+// ─── FEATURE 3: POST CHAIN RESULTS EMBED ─────────────────────────────────────
+// Sends a rich embed to the configured chain results channel when a chain ends.
+async function postChainResultsEmbed(chainLength, respect, memberHits, timestamp) {
+  const channelId = config.chainChannelId;
+  if (!channelId) {
+    console.log("[CHAIN] No chainChannelId configured, skipping chain results post. Use /setchainchannel to set one.");
+    return;
+  }
+
+  // Sort members by hits descending
+  const sorted = Object.entries(memberHits)
+    .sort((a, b) => b[1] - a[1]);
+
+  // Resolve player names from Torn API
+  const allIds = sorted.map(([id]) => id);
+  const nameMap = await resolveTornPlayerNames(allIds);
+
+  // Build top hitters text (show top 10)
+  const medals = ["🥇", "🥈", "🥉"];
+  const topHitters = sorted.slice(0, 10).map(([id, hits], i) => {
+    const name = nameMap.get(id) || `Player ${id}`;
+    const medal = medals[i] || `**${i + 1}.**`;
+    return `${medal} [${name}](${playerProfileLink(id)}) — **${hits}** hits`;
+  }).join("\n");
+
+  // Count members with 0 hits (those in faction but not in chain report)
+  const zeroHitters = sorted.filter(([_, hits]) => hits === 0).length;
+
+  const embed = new EmbedBuilder()
+    .setTitle("🔥 Chain Complete!")
+    .setColor(0xFF4500)
+    .addFields(
+      { name: "Chain Length", value: `**${chainLength.toLocaleString()}**`, inline: true },
+      { name: "Respect Earned", value: `**${Number(respect).toLocaleString(undefined, { maximumFractionDigits: 2 })}**`, inline: true },
+      { name: "Participants", value: `**${sorted.filter(([_, h]) => h > 0).length}** members hit`, inline: true },
+      { name: "🏆 Top Hitters", value: topHitters || "No data", inline: false },
+      { name: "😴 Members with 0 Hits", value: zeroHitters > 0 ? `${zeroHitters} member(s) contributed nothing` : "Everyone pitched in!", inline: false }
+    )
+    .setFooter({ text: `Chain ended` })
+    .setTimestamp(timestamp * 1000);
+
+  await sendToChannel(channelId, { embeds: [embed] });
+  console.log(`[CHAIN] Posted chain results embed to channel ${channelId}`);
+}
+
+// ─── FEATURE 1: CHAIN POLL — DETECT CHAIN END ────────────────────────────────
+// Polls the Torn API faction chain endpoint every minute.
+// When a chain transitions from active to inactive, triggers chain report fetch.
+async function checkChainStatus() {
+  try {
+    const url = `https://api.torn.com/v2/faction/${FACTION_ID}?selections=chain&key=${TORN_API_KEY}`;
+    const res = await fetch(url);
+    if (!res.ok) { console.warn(`[CHAIN] Chain status HTTP error: ${res.status}`); return; }
+    const data = await res.json();
+    if (data.error) { console.warn("[CHAIN] Chain status API error:", data.error); return; }
+
+    // Navigate chain data — handle both v1 and v2 shapes
+    const chainData = data.chain || data.faction?.chain;
+    if (!chainData) { return; } // No chain data available
+
+    // The `current` field is the live chain counter; `timeout` is seconds remaining.
+    // A chain is "active" if timeout > 0 (it hasn't timed out yet).
+    const currentLength = chainData.current || chainData.chain || 0;
+    const timeout = chainData.timeout || 0;
+    const isActive = timeout > 0 && currentLength > 0;
+
+    console.log(`[CHAIN] Status — length: ${currentLength}, timeout: ${timeout}s, active: ${isActive}`);
+
+    // Detect transition: was active last tick, now inactive → chain just ended
+    if (lastChainActive && !isActive && lastChainLength > 0) {
+      console.log(`[CHAIN] Chain ended! Last length: ${lastChainLength}. Fetching report in 30s (API delay)...`);
+      // Wait 30 seconds for Torn to generate the report before fetching
+      setTimeout(() => fetchAndProcessChainReport(lastChainLength), 30 * 1000);
+    }
+
+    lastChainLength = currentLength;
+    lastChainActive = isActive;
+
+  } catch (err) {
+    console.error("[CHAIN] Error checking chain status:", err);
+  }
+}
+
+// ─── FEATURE 4: MONTHLY LEADERBOARD ──────────────────────────────────────────
+// Sends monthly leaderboard on the 1st of each month.
+// Also used by the /monthlyleaderboard command.
+async function getMonthlyLeaderboardEmbed(monthKey = null) {
+  const targetMonth = monthKey || getMonthKey();
+  const monthData = monthlyHitsData[targetMonth];
+
+  if (!monthData || Object.keys(monthData).length === 0) {
+    return new EmbedBuilder()
+      .setTitle("🔥 Monthly Chain Leaderboard")
+      .setDescription(`No chain data recorded for **${targetMonth}** yet.`)
+      .setColor(0xFF4500)
+      .setTimestamp();
+  }
+
+  // Sort by hit count descending, take top 10
+  const sorted = Object.entries(monthData)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10);
+
+  // Resolve player names
+  const nameMap = await resolveTornPlayerNames(sorted.map(([id]) => id));
+
+  const medals = ["🥇", "🥈", "🥉"];
+  const lines = sorted.map(([id, hits], i) => {
+    const name = nameMap.get(id) || `Player ${id}`;
+    const medal = medals[i] || `**${i + 1}.**`;
+    return `${medal} [${name}](${playerProfileLink(id)}) — **${hits.toLocaleString()}** hits`;
+  }).join("\n");
+
+  // Calculate total hits this month for context
+  const totalHits = Object.values(monthData).reduce((a, b) => a + b, 0);
+
+  return new EmbedBuilder()
+    .setTitle(`🔥 Monthly Chain Leaderboard — ${targetMonth}`)
+    .setDescription(lines)
+    .addFields({ name: "Total Hits This Month", value: totalHits.toLocaleString(), inline: true })
+    .setColor(0xFFD700)
+    .setTimestamp();
+}
+
+// Check on 1st of month at noon UTC (runs inside the OC poll interval)
+async function checkMonthlyLeaderboardTrigger() {
+  const now = new Date();
+  const day = now.getUTCDate();
+  const hour = now.getUTCHours();
+  const today = now.toDateString();
+
+  if (day === 1 && hour === 12 && config.lastMonthlyLeaderboardSent !== today && config.chainChannelId) {
+    try {
+      // Get the previous month's leaderboard
+      const prevDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+      const prevMonthKey = getMonthKey(prevDate);
+      const embed = await getMonthlyLeaderboardEmbed(prevMonthKey);
+      await sendToChannel(config.chainChannelId, { embeds: [embed] });
+      config.lastMonthlyLeaderboardSent = today;
+      saveConfig();
+      console.log("[CHAIN] Monthly leaderboard posted for", prevMonthKey);
+    } catch (err) {
+      console.error("[CHAIN] Failed to send monthly leaderboard:", err);
+    }
+  }
+}
+
+// ─── FEATURE 5: CHAIN STATS HELPER FOR /chainstats ───────────────────────────
+// Returns stats for a specific Torn player ID across all recorded chains.
+function getPlayerChainStats(tornPlayerId) {
+  const idStr = String(tornPlayerId);
+  const monthKey = getMonthKey();
+  const monthlyHits = (monthlyHitsData[monthKey] || {})[idStr] || 0;
+
+  // Count chains participated in and total hits across all recorded chains
+  let chainsParticipated = 0;
+  let totalHitsAllTime = 0;
+
+  for (const [, chainRecord] of Object.entries(chainsData)) {
+    const hits = chainRecord.members?.[idStr];
+    if (hits !== undefined) {
+      chainsParticipated++;
+      totalHitsAllTime += hits;
+    }
+  }
+
+  const avgHitsPerChain = chainsParticipated > 0
+    ? Math.round(totalHitsAllTime / chainsParticipated)
+    : 0;
+
+  return { monthlyHits, chainsParticipated, totalHitsAllTime, avgHitsPerChain };
+}
+
+
 // ─── OC CHECK (runs every 10 mins) ───────────────────────────────────────────
-//
-// Strategy: the /v2/faction/{id}?selections=members endpoint does NOT include
-// OC data. Instead we call /v2/faction/crimes to get all active crimes and
-// build a Set of member IDs who are currently in one. Anyone not in that set
-// is considered "not in OC".
 
 async function checkOrganisedCrime() {
   console.log("[OC CHECK] Running organised crime check...");
@@ -443,38 +788,74 @@ async function checkOrganisedCrime() {
     if (members.length === 0) { console.warn("[OC CHECK] No members returned from API"); return; }
 
     // ── 2. Fetch active/planned crimes ──────────────────────────────────────
-    // cat=available returns crimes that are in planning or ready-to-execute state
     const crimesUrl = `https://api.torn.com/v2/faction/crimes?cat=available&key=${TORN_API_KEY}`;
     const crimesRes = await fetch(crimesUrl);
     if (!crimesRes.ok) { console.error(`[OC CHECK] Crimes API error: ${crimesRes.status}`); return; }
     const crimesData = await crimesRes.json();
     if (crimesData.error) {
       console.error("[OC CHECK] Crimes API error:", crimesData.error);
-      // Don't bail entirely — if crimes endpoint errors, we can't tell who's in OC
-      // so skip this cycle rather than falsely marking everyone as not-in-OC
       return;
     }
 
     // ── 3. Build set of member IDs currently in an OC ───────────────────────
-    // Also track which crimes are "ready" (all slots filled, awaiting execution)
-    // crimes response shape: { crimes: [ { id, name, status, slots: [ { user_id, ... } ] } ] }
-    const inOcSet = new Set();      // player_id strings of members in any active OC
-    const readyOcByMember = {};     // player_id -> { ocId, ocName, readySince (from our state) }
+    const inOcSet = new Set();
+    const readyOcByMember = {};
 
     const crimes = crimesData.crimes || [];
     console.log(`[OC CHECK] Found ${crimes.length} active crime(s)`);
 
+    // ── FEATURE 6: OC DELAY DETECTION ────────────────────────────────────────
+    // For each active crime, check if it has unfilled slots and warn if so.
+    const ocAlertChannelId = config.ocAlertChannelId;
+    const delayWarningChannelId = config.delayWarningChannelId;
+
     for (const crime of crimes) {
       const crimeStatus = (crime.status || "").toLowerCase();
-      // API status values (case-insensitive): "recruiting", "planning", "ready"
-      // "recruiting" = slots not all filled yet, "planning" = all filled and training
-      // "ready" = ready_at has passed, can now be executed
       const isReady = crimeStatus === "ready";
       const slots = crime.slots || [];
 
+      // ── Feature 6: Detect crimes with empty slots (members not yet assigned) ─
+      // "recruiting" status means slots are not yet fully filled
+      if (crimeStatus === "recruiting") {
+        const emptySlots = slots.filter(s => !s.user);
+        const filledSlots = slots.filter(s => s.user);
+
+        // Only warn once per crime (use crime ID as key)
+        const warnKey = `slot_${crime.id}`;
+        if (emptySlots.length > 0 && !ocSlotWarnedCrimes.has(warnKey)) {
+          ocSlotWarnedCrimes.add(warnKey);
+          console.log(`[OC] Crime ${crime.id} "${crime.name}" has ${emptySlots.length} empty slot(s)`);
+
+          // Build list of members already assigned (they're not the problem, but context helps)
+          const assignedNames = filledSlots
+            .map(s => s.user?.name || `ID ${s.user?.id}`)
+            .filter(Boolean)
+            .join(", ");
+
+          const embed = new EmbedBuilder()
+            .setTitle("⚠️ OC Delay Detected — Unfilled Slots")
+            .setDescription(
+              `**${crime.name || "Unknown OC"}** is recruiting but has **${emptySlots.length}** unfilled slot(s).\n` +
+              `The OC cannot start until all slots are filled.`
+            )
+            .addFields(
+              { name: "Crime", value: crime.name || "Unknown", inline: true },
+              { name: "Empty Slots", value: `${emptySlots.length}`, inline: true },
+              { name: "Assigned Members", value: assignedNames || "None yet", inline: false }
+            )
+            .setColor(0xFFA500)
+            .setTimestamp();
+
+          await sendToChannel(ocAlertChannelId, { embeds: [embed] });
+        }
+      } else {
+        // Crime is no longer recruiting — clear its warn key so if it recurrs it'll warn again
+        ocSlotWarnedCrimes.delete(`slot_${crime.id}`);
+      }
+
+      // ── Existing OC tracking logic ────────────────────────────────────────
       for (const slot of slots) {
-        // Real API shape: slot.user is an object with slot.user.id, or null if empty
-        if (!slot.user) continue; // empty slot, nobody assigned
+        if (!slot.user) continue;
         const uid = String(slot.user.id || "");
         if (!uid || uid === "0") continue;
         inOcSet.add(uid);
@@ -491,8 +872,6 @@ async function checkOrganisedCrime() {
 
     // ── 4. Process each member ───────────────────────────────────────────────
     const now = Date.now();
-    const ocAlertChannelId = config.ocAlertChannelId;
-    const delayWarningChannelId = config.delayWarningChannelId;
 
     for (const m of members) {
       const id = String(m.player_id);
@@ -501,7 +880,6 @@ async function checkOrganisedCrime() {
       const isReady = !!readyOcByMember[id];
       const ocName = readyOcByMember[id]?.ocName || null;
 
-      // First time we've ever seen this member — record silently, no alerts
       if (!ocState[id]) {
         ocState[id] = {
           name,
@@ -511,7 +889,7 @@ async function checkOrganisedCrime() {
           oc_ready_since: null,
           delay_warned: false,
           last_seen: now,
-          first_seen: now  // suppresses alerts this cycle
+          first_seen: now
         };
         console.log(`[OC] First time seeing ${name} (${id}) — recording silently`);
         continue;
@@ -521,9 +899,7 @@ async function checkOrganisedCrime() {
       ocState[id].last_seen = now;
       const state = ocState[id];
 
-      // ── Branch: member IS in an OC ────────────────────────────────────────
       if (inOc) {
-        // Reset not-in-OC timer when they join
         if (state.not_in_oc_since !== null) {
           console.log(`[OC] ${name} is now in an OC — resetting timer`);
           state.not_in_oc_since = null;
@@ -531,7 +907,6 @@ async function checkOrganisedCrime() {
           state.struck_48h = false;
         }
 
-        // Track OC ready state for delay strike
         if (isReady) {
           if (!state.oc_ready_since) {
             state.oc_ready_since = now;
@@ -557,17 +932,13 @@ async function checkOrganisedCrime() {
             await sendToChannel(delayWarningChannelId || ocAlertChannelId, { embeds: [embed] });
           }
         } else {
-          // OC executed or reset
           if (state.oc_ready_since) {
             console.log(`[OC] ${name}'s OC ready state cleared`);
             state.oc_ready_since = null;
             state.delay_warned = false;
           }
         }
-      }
-
-      // ── Branch: member NOT in an OC ───────────────────────────────────────
-      else {
+      } else {
         state.oc_ready_since = null;
         state.delay_warned = false;
 
@@ -580,7 +951,6 @@ async function checkOrganisedCrime() {
 
         const timeOutMs = now - state.not_in_oc_since;
 
-        // 12h warning
         if (timeOutMs >= OC_WARN_12H && !state.warned_12h) {
           state.warned_12h = true;
           console.log(`[OC] 12h warning for ${name} (${formatDuration(timeOutMs)} without OC)`);
@@ -596,7 +966,6 @@ async function checkOrganisedCrime() {
           await sendToChannel(ocAlertChannelId, { embeds: [embed] });
         }
 
-        // 48h strike
         if (timeOutMs >= OC_STRIKE_48H && !state.struck_48h) {
           state.struck_48h = true;
           const strikeCount = addStrike(id, name, `48h without OC (${formatDuration(timeOutMs)})`);
@@ -636,11 +1005,15 @@ async function checkOrganisedCrime() {
       }
     }
 
+    // ── Feature 4: Check if monthly leaderboard should fire ───────────────
+    await checkMonthlyLeaderboardTrigger();
+
     console.log("[OC CHECK] Done.");
   } catch (err) {
     console.error("[OC CHECK] Error:", err);
   }
 }
+
 
 // ─── AUTO-ROLE & WELCOME ─────────────────────────────────────────────────────
 
@@ -663,6 +1036,7 @@ client.on("guildMemberAdd", async (member) => {
     }
   } catch (err) { console.error(`Uhhhh something broke welcoming ${member.user.tag}:`, err); }
 });
+
 
 // ─── REACTION ROLE HANDLERS ───────────────────────────────────────────────────
 
@@ -691,6 +1065,7 @@ client.on("messageReactionRemove", async (reaction, user) => {
   const member = await message.guild?.members.fetch(user.id).catch(() => null);
   if (member?.roles.cache.has(roleId)) await member.roles.remove(roleId).catch(console.error);
 });
+
 
 // ─── CROSS-CHANNEL SPAM ───────────────────────────────────────────────────────
 
@@ -722,6 +1097,7 @@ async function checkCrossChannelSpam(message) {
   }
   return false;
 }
+
 
 // ─── MESSAGE / XP HANDLER ────────────────────────────────────────────────────
 
@@ -793,6 +1169,7 @@ client.on("messageCreate", async (message) => {
     }
   } catch (err) { console.error("messageCreate error:", err); }
 });
+
 
 // ─── JAIL CHECK ───────────────────────────────────────────────────────────────
 
@@ -868,6 +1245,7 @@ async function checkFactionJail() {
   } catch (err) { console.error("Jail check went boom:", err); }
 }
 
+
 // ─── CHAIN WATCH ─────────────────────────────────────────────────────────────
 
 const CHAIN_WATCH_CHANNEL_ID = "1168943503544418354";
@@ -898,6 +1276,7 @@ async function processChainWatchSchedule() {
     }
   }
 }
+
 
 // ─── COMMAND HANDLER ─────────────────────────────────────────────────────────
 
@@ -1065,6 +1444,17 @@ client.on("interactionCreate", async (interaction) => {
     await interaction.reply({ content: `✅ OC delay strike warnings will post to ${channel}`, ephemeral: true });
   }
 
+  // ── /setchainchannel — FEATURE 7 ──────────────────────────────────────────
+  if (interaction.commandName === "setchainchannel") {
+    if (!interaction.member.permissions.has("Administrator"))
+      return interaction.reply({ content: "❌ admins only", ephemeral: true });
+    const channel = interaction.options.getChannel("channel");
+    if (!channel.isTextBased()) return interaction.reply({ content: "❌ pick a text channel", ephemeral: true });
+    config.chainChannelId = channel.id;
+    saveConfig();
+    await interaction.reply({ content: `✅ Chain results and monthly leaderboards will post to ${channel}`, ephemeral: true });
+  }
+
   // ── /oc ────────────────────────────────────────────────────────────────────
   if (interaction.commandName === "oc") {
     const now = Date.now();
@@ -1123,7 +1513,6 @@ client.on("interactionCreate", async (interaction) => {
     const all = getAllActiveStrikes();
 
     if (targetName) {
-      // Show strikes for specific player
       const playerStrikes = all.filter(s => s.name.toLowerCase().includes(targetName.toLowerCase()));
       if (playerStrikes.length === 0) {
         return interaction.reply({ content: `✅ No active strikes found for **${targetName}**`, ephemeral: true });
@@ -1140,7 +1529,6 @@ client.on("interactionCreate", async (interaction) => {
         .setTimestamp();
       await interaction.reply({ embeds: [embed], ephemeral: true });
     } else {
-      // Show all players with strikes
       const grouped = {};
       for (const s of all) {
         if (!grouped[s.player_id]) grouped[s.player_id] = { name: s.name, count: 0 };
@@ -1178,14 +1566,12 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.reply({ content: `❌ No active strikes found for **${targetName}**`, ephemeral: true });
 
     if (indexArg !== null) {
-      // Remove specific strike by 1-based index
       const toRemove = playerStrikes[indexArg - 1];
       if (!toRemove) return interaction.reply({ content: `❌ Strike #${indexArg} not found for ${targetName}`, ephemeral: true });
       const newStrikes = active.filter(s => !(s.player_id === toRemove.player_id && s.timestamp === toRemove.timestamp));
       saveStrikes(newStrikes);
       await interaction.reply({ content: `✅ Removed strike #${indexArg} from **${toRemove.name}** (${toRemove.reason})`, ephemeral: true });
     } else {
-      // Remove all strikes for player
       const newStrikes = active.filter(s => !s.name.toLowerCase().includes(targetName.toLowerCase()));
       saveStrikes(newStrikes);
       await interaction.reply({ content: `✅ Cleared **${playerStrikes.length}** strike(s) for **${playerStrikes[0].name}**`, ephemeral: true });
@@ -1288,13 +1674,111 @@ client.on("interactionCreate", async (interaction) => {
       msg.edit({ embeds: [final] }).catch(() => {});
     });
   }
+
+  // ── /monthlyleaderboard — FEATURE 4 ───────────────────────────────────────
+  if (interaction.commandName === "monthlyleaderboard") {
+    await interaction.deferReply({ ephemeral: false }).catch(() => {});
+    try {
+      const monthArg = interaction.options.getString("month"); // optional YYYY-MM
+      const embed = await getMonthlyLeaderboardEmbed(monthArg || null);
+      await interaction.editReply({ embeds: [embed] });
+    } catch (err) {
+      console.error("[CHAIN] /monthlyleaderboard error:", err);
+      await interaction.editReply({ content: "❌ Failed to build leaderboard, check logs." });
+    }
+  }
+
+  // ── /chainstats — FEATURE 5 ────────────────────────────────────────────────
+  if (interaction.commandName === "chainstats") {
+    await interaction.deferReply({ ephemeral: false }).catch(() => {});
+    try {
+      const discordUser = interaction.options.getUser("user") || interaction.user;
+      const tornIdArg = interaction.options.getString("tornid"); // optional manual Torn ID
+
+      // Determine which Torn player ID to look up
+      // Priority: explicit Torn ID arg > try to find Discord user in xpData / ocState by Discord ID
+      // (There's no Discord↔Torn ID link in this bot, so we use tornid arg or guess from ocState name)
+      let tornId = tornIdArg || null;
+      let resolvedName = discordUser.username;
+
+      if (!tornId) {
+        // Try to find the player in ocState by matching the Discord username/display name
+        // This is a best-effort fuzzy match since there's no Torn↔Discord link stored
+        const lowerTarget = discordUser.username.toLowerCase();
+        for (const [id, data] of Object.entries(ocState)) {
+          if ((data.name || "").toLowerCase() === lowerTarget) {
+            tornId = id;
+            resolvedName = data.name;
+            break;
+          }
+        }
+      } else {
+        // Resolve name from ocState or API
+        resolvedName = ocState[tornId]?.name || `Player ${tornId}`;
+      }
+
+      if (!tornId) {
+        // No Torn ID could be determined — ask user to provide it
+        await interaction.editReply({
+          content: `❌ Couldn't find a Torn player ID for **${discordUser.username}**.\n` +
+            `Use \`/chainstats tornid:YOUR_TORN_ID\` to specify it directly.\n` +
+            `Your Torn profile: https://www.torn.com/profiles.php`
+        });
+        return;
+      }
+
+      const stats = getPlayerChainStats(tornId);
+
+      // Try to get a fresher name from Torn API
+      const nameMap = await resolveTornPlayerNames([tornId]);
+      if (nameMap.has(tornId)) resolvedName = nameMap.get(tornId);
+
+      const monthKey = getMonthKey();
+      const embed = new EmbedBuilder()
+        .setTitle(`⛓️ Chain Stats — ${resolvedName}`)
+        .setDescription(`[View Torn Profile](${playerProfileLink(tornId)})`)
+        .addFields(
+          { name: `Monthly Hits (${monthKey})`, value: stats.monthlyHits.toLocaleString(), inline: true },
+          { name: "Chains Participated", value: stats.chainsParticipated.toLocaleString(), inline: true },
+          { name: "Avg Hits Per Chain", value: stats.avgHitsPerChain.toLocaleString(), inline: true },
+          { name: "All-Time Hits (recorded)", value: stats.totalHitsAllTime.toLocaleString(), inline: true }
+        )
+        .setColor(0xFF4500)
+        .setFooter({ text: `Torn ID: ${tornId}` })
+        .setTimestamp();
+
+      await interaction.editReply({ embeds: [embed] });
+    } catch (err) {
+      console.error("[CHAIN] /chainstats error:", err);
+      await interaction.editReply({ content: "❌ Failed to fetch chain stats, check logs." });
+    }
+  }
+
+  // ── /fetchchainreport — manual trigger for admins ─────────────────────────
+  if (interaction.commandName === "fetchchainreport") {
+    if (!interaction.member.permissions.has("Administrator"))
+      return interaction.reply({ content: "❌ admins only", ephemeral: true });
+    await interaction.deferReply({ ephemeral: true });
+    try {
+      const result = await fetchAndProcessChainReport(0);
+      if (result) {
+        await interaction.editReply(`✅ Chain report fetched! Chain length: **${result.chainLength}**, Respect: **${result.respect}**, Members: **${Object.keys(result.memberHits).length}**`);
+      } else {
+        await interaction.editReply("❌ Failed to fetch chain report — check logs for details.");
+      }
+    } catch (err) {
+      await interaction.editReply(`❌ Error: ${err.message}`);
+    }
+  }
 });
+
 
 // ─── COMMAND REGISTRATION ────────────────────────────────────────────────────
 
 async function registerCommands() {
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
   const commands = [
+    // ── Existing commands (unchanged) ────────────────────────────────────────
     new SlashCommandBuilder()
       .setName("jail").setDescription("Configure jail alert notifications")
       .addChannelOption(o => o.setName("channel").setDescription("Channel for jail alerts").setRequired(true))
@@ -1363,6 +1847,33 @@ async function registerCommands() {
       .addStringOption(o => o.setName("emoji3").setDescription("Choice 3").setRequired(false))
       .addStringOption(o => o.setName("emoji4").setDescription("Choice 4").setRequired(false))
       .addStringOption(o => o.setName("emoji5").setDescription("Choice 5").setRequired(false)),
+
+    // ── NEW commands (Features 1-7) ───────────────────────────────────────────
+
+    // Feature 7: Configure chain results channel
+    new SlashCommandBuilder()
+      .setName("setchainchannel")
+      .setDescription("Set channel for chain results and monthly leaderboards")
+      .addChannelOption(o => o.setName("channel").setDescription("Chain results channel").setRequired(true)),
+
+    // Feature 4: Monthly leaderboard on demand
+    new SlashCommandBuilder()
+      .setName("monthlyleaderboard")
+      .setDescription("Show the monthly chain hit leaderboard")
+      .addStringOption(o => o.setName("month").setDescription("Month to view (YYYY-MM format, default: current month)").setRequired(false)),
+
+    // Feature 5: Per-user chain stats
+    new SlashCommandBuilder()
+      .setName("chainstats")
+      .setDescription("View chain hit stats for a player")
+      .addUserOption(o => o.setName("user").setDescription("Discord user (optional)").setRequired(false))
+      .addStringOption(o => o.setName("tornid").setDescription("Torn player ID (use this if Discord user doesn't match)").setRequired(false)),
+
+    // Feature 1: Manual chain report fetch (admin)
+    new SlashCommandBuilder()
+      .setName("fetchchainreport")
+      .setDescription("Admin: manually fetch and process the latest chain report"),
+
   ].map(cmd => cmd.toJSON());
 
   try {
@@ -1374,6 +1885,7 @@ async function registerCommands() {
 
 // Load any existing not_oc.csv data into ocState on startup
 loadNotOcCsvLegacy();
+
 
 // ─── STARTUP ─────────────────────────────────────────────────────────────────
 
@@ -1392,6 +1904,7 @@ async function handleClientReady() {
     // Initial checks
     try { await checkFactionJail(); } catch (err) { console.error("Initial jail check error:", err); }
     try { await checkOrganisedCrime(); } catch (err) { console.error("Initial OC check error:", err); }
+    try { await checkChainStatus(); } catch (err) { console.error("Initial chain check error:", err); }
 
     processChainWatchSchedule();
 
@@ -1405,6 +1918,14 @@ async function handleClientReady() {
     setInterval(async () => {
       try { await checkOrganisedCrime(); } catch (err) { console.error("OC check error:", err); }
     }, OC_POLL_INTERVAL);
+
+    // ── Feature 1: Chain status poll every 60 seconds ──────────────────────
+    setInterval(async () => {
+      try { await checkChainStatus(); } catch (err) { console.error("Chain check error:", err); }
+    }, CHAIN_POLL_INTERVAL);
+
+    console.log("[CHAIN] Chain monitoring started. Poll interval: 60s");
+    console.log(`[CHAIN] Chain results channel: ${config.chainChannelId || "not configured (use /setchainchannel)"}`);
 
   } catch (err) { console.error("Error in ready handler:", err); }
 }
