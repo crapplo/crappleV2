@@ -55,7 +55,7 @@ if (!fs.existsSync(DATA_DIR)) {
 
 // Validate required environment variables
 if (!DISCORD_TOKEN) {
-  console.error("YIKES! Missing DISCORD_TOKEN in .env - I can't login without that bestie");
+  console.error("YIKES! Missing DISCORD_TOKEN in .env - I can't login without that fucking shit");
   process.exit(1);
 }
 if (!TORN_API_KEY) {
