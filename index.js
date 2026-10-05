@@ -125,7 +125,7 @@ let monthlyReportsData = fs.existsSync(MONTHLY_REPORTS_FILE)
 // OC thresholds
 const OC_WARN_12H = 12 * 60 * 60 * 1000;   // 12 hours in ms
 const OC_STRIKE_48H = 48 * 60 * 60 * 1000; // 48 hours in ms
-const OC_DELAY_WARN = 20 * 60 * 1000;       // 20 minutes in ms
+const OC_DELAY_WARN = 10 * 60 * 1000;       // 10 minutes in ms
 const STRIKE_EXPIRY_DAYS = 30;
 
 // ─── FEATURE 6: OC SLOT VACANCY TRACKING ─────────────────────────────────────
